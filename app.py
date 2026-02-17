@@ -1,65 +1,136 @@
 import streamlit as st
 import pandas as pd
+import re
 from io import BytesIO
+
+st.set_page_config(page_title="Bank Statement Tool", layout="wide")
+
+st.title("Bank Statement Classification Tool")
+
+# ---------- MODE SELECTION ----------
 mode = st.radio(
-    "Select Processing Mode:",
+    "Choose Mode",
     ["Normal Classification", "Interbank Detection"]
 )
 
+# ---------- FILE UPLOAD ----------
 uploaded_files = st.file_uploader(
     "Upload Bank Statement(s)",
     type=["xlsx", "xls"],
     accept_multiple_files=True
 )
 
+
+# ---------- RULES LOADING ----------
+def load_rules():
+    try:
+        rules = pd.read_excel("rules/key words.xlsx")
+        rules.columns = [c.strip() for c in rules.columns]
+        return rules
+    except:
+        return None
+
+
+# ---------- NAME EXTRACTION ----------
+def extract_name(text):
+    text = str(text).upper()
+
+    # Remove common noise
+    text = re.sub(r"UPI|IMPS|NEFT|RTGS|CR|DR|TRANSFER|PAYMENT", "", text)
+    text = re.sub(r"[^A-Z ]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    words = text.split()
+    name_words = [w for w in words if len(w) > 2]
+
+    return " ".join(name_words[:3])
+
+
+# ---------- NORMAL CLASSIFICATION ----------
+def classify_transactions(df):
+    rules = load_rules()
+
+    if rules is None:
+        st.warning("Rules Excel not found.")
+        df["Transaction_Head"] = "Review Required"
+        return df
+
+    df.columns = [c.strip() for c in df.columns]
+
+    if "Narration" not in df.columns:
+        st.error("Narration column missing in statement.")
+        df["Transaction_Head"] = "Review Required"
+        return df
+
+    df["Transaction_Head"] = "Review Required"
+
+    for _, r in rules.iterrows():
+        keyword = str(r.get("Keyword", "")).upper()
+        head = r.get("Transaction_Head", "Review Required")
+        extract_flag = str(r.get("Extract_Client_Name", "NO")).upper()
+
+        mask = df["Narration"].astype(str).str.upper().str.contains(keyword, na=False)
+
+        if extract_flag == "YES":
+            df.loc[mask, "Transaction_Head"] = (
+                df.loc[mask, "Narration"].apply(extract_name)
+            )
+        else:
+            df.loc[mask, "Transaction_Head"] = head
+
+    return df
+
+
+# ---------- INTERBANK DETECTION ----------
+def detect_interbank(dfs):
+    combined = pd.concat(dfs, ignore_index=True)
+
+    combined.columns = [c.strip() for c in combined.columns]
+
+    if not {"Payment", "Receipt", "Tran Date"}.issubset(set(combined.columns)):
+        st.error("Required columns missing for interbank detection.")
+        return combined
+
+    combined["Transaction_Head"] = "Normal"
+
+    for i, row in combined.iterrows():
+        payment = row.get("Payment", 0)
+        receipt = row.get("Receipt", 0)
+        date = row.get("Tran Date")
+
+        match = combined[
+            (combined["Tran Date"] == date)
+            & ((combined["Payment"] == receipt) | (combined["Receipt"] == payment))
+        ]
+
+        if len(match) > 1:
+            combined.loc[i, "Transaction_Head"] = "Interbank"
+
+    return combined
+
+
+# ---------- PROCESS ----------
 if uploaded_files:
 
     dfs = []
 
     for file in uploaded_files:
         df = pd.read_excel(file)
-        df["Source_File"] = file.name
         dfs.append(df)
 
-    combined_df = pd.concat(dfs, ignore_index=True)
+    if mode == "Normal Classification":
+        result_df = pd.concat([classify_transactions(df) for df in dfs])
+    else:
+        result_df = detect_interbank(dfs)
 
-    # ---- Always do normal classification first ----
-    combined_df = classify_transactions(combined_df)
+    st.success("Processing completed.")
 
-    # ---- Interbank detection only if selected ----
-    if mode == "Interbank Detection" and len(uploaded_files) > 1:
-
-        debit_cols = ["DEBIT", "WITHDRAWAL", "PAYMENT"]
-        credit_cols = ["CREDIT", "DEPOSIT", "RECEIPT"]
-
-        debit_col = next((c for c in combined_df.columns if c.upper() in debit_cols), None)
-        credit_col = next((c for c in combined_df.columns if c.upper() in credit_cols), None)
-
-        date_col = next((c for c in combined_df.columns if "DATE" in c.upper()), None)
-
-        if debit_col and credit_col and date_col:
-
-            combined_df["Amount"] = (
-                combined_df[debit_col].fillna(0) +
-                combined_df[credit_col].fillna(0)
-            )
-
-            grouped = combined_df.groupby([date_col, "Amount"])
-
-            for _, grp in grouped:
-                if len(grp) == 2:
-                    if grp[debit_col].notna().any() and grp[credit_col].notna().any():
-                        combined_df.loc[grp.index, "Transaction_Head"] = "Interbank Transfer"
-
-    # ---- Download output ----
     buffer = BytesIO()
-    combined_df.to_excel(buffer, index=False, engine="openpyxl")
-    buffer.seek(0)
+    result_df.to_excel(buffer, index=False, engine="openpyxl")
 
     st.download_button(
-        "Download Processed Statement",
-        data=buffer,
-        file_name="processed_statement.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "Download Classified Statement",
+        buffer.getvalue(),
+        "classified_statement.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
