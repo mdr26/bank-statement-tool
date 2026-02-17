@@ -8,72 +8,77 @@ from io import BytesIO
 st.title("Bank Statement Classification Tool")
 
 
-# ---------- CLEAN TEXT ----------
+# -------- CLEAN TEXT --------
 def clean_text(text):
     if pd.isna(text):
         return ""
     return str(text).upper().strip()
 
 
-# ---------- FIND NARRATION COLUMN ----------
+# -------- DETECT NARRATION COLUMN --------
 def find_narration_column(df):
+    possible_cols = [
+        "NARRATION",
+        "DESCRIPTION",
+        "REMARKS",
+        "PARTICULARS",
+        "TRANSACTION DETAILS",
+        "TXN REMARKS",
+    ]
+
     for col in df.columns:
-        if (
-            "NARRATION" in col.upper()
-            or "DESCRIPTION" in col.upper()
-            or "PARTICULARS" in col.upper()
-        ):
+        if clean_text(col) in possible_cols:
             return col
+
     return None
 
 
-# ---------- CLIENT NAME EXTRACTION ----------
-def extract_client_name(narration, keyword):
+# -------- CLIENT NAME EXTRACTION --------
+def extract_client_name(narration):
 
     narration = clean_text(narration)
 
-    # Remove keyword first
-    narration = narration.replace(keyword, "")
+    # ===== SBI SPECIFIC UPI FORMAT =====
+    # Example:
+    # DEP TFR UPI/CR/409293829100/METRO
+    if "UPI/" in narration:
+        parts = narration.split("/")
 
-    # Split narration by common separators
-    parts = re.split(r"[\/\-]", narration)
+        for p in reversed(parts):
+            p = p.strip()
 
-    bank_words = [
-        "SBIN", "HDFC", "ICICI", "AXIS", "FDRL",
-        "UBIN", "KKBK", "CNBR", "BANK", "TXN",
-        "REF", "MB", "BRN", "CLG", "UPI",
-        "IMPS", "NEFT", "RTGS", "TRANSFER",
-        "PAYMENT", "DR", "CR"
-    ]
+            if not p:
+                continue
 
-    for part in parts:
+            if p.isdigit():
+                continue
 
-        part = part.strip()
+            if p in ["CR", "DR", "REV", "UPI"]:
+                continue
 
-        # Skip numeric-only parts
-        if part.isdigit():
-            continue
+            if len(p) > 2:
+                return re.sub(r"[^A-Z ]", "", p).strip()
 
-        # Skip mostly numeric tokens
-        if sum(c.isdigit() for c in part) > 3:
-            continue
+    # ===== GENERIC CLEANUP =====
+    narration = re.sub(
+        r"\b(DR|CR|UPI|IMPS|NEFT|RTGS|BANK|TXN|REF|MB|AXOMB|BRN|CLG)\b",
+        "",
+        narration,
+    )
 
-        # Skip bank codes
-        if any(b in part for b in bank_words):
-            continue
+    narration = re.sub(r"\d+", "", narration)
+    narration = re.sub(r"[@*/\-_:]", " ", narration)
+    narration = re.sub(r"\s+", " ", narration).strip()
 
-        # Skip very short tokens
-        if len(part) < 3:
-            continue
+    words = narration.split()
 
-        # Valid name must contain alphabets
-        if re.search(r"[A-Z]", part):
-            return part.strip()
+    if len(words) >= 2:
+        return " ".join(words[:3])
 
     return ""
 
 
-# ---------- CLASSIFICATION ----------
+# -------- CLASSIFICATION --------
 def classify_transactions(df):
 
     rules_path = "key words.xlsx"
@@ -99,43 +104,30 @@ def classify_transactions(df):
 
         narration = clean_text(row[narration_col])
 
-        for _, r in rules.iterrows():
+        # First try extracting name
+        name = extract_client_name(narration)
+        if name:
+            df.at[i, "Transaction_Head"] = name
+            continue
 
+        # Otherwise use rules
+        for _, r in rules.iterrows():
             keyword = clean_text(r.get("Keyword", ""))
 
             if keyword and keyword in narration:
-
-                extract_flag = str(
-                    r.get("Extract_Client_Name", "NO")
-                ).upper()
-
-                if extract_flag == "YES":
-
-                    name = extract_client_name(narration, keyword)
-
-                    if name:
-                        df.at[i, "Transaction_Head"] = name
-                    else:
-                        df.at[i, "Transaction_Head"] = r.get(
-                            "Transaction_Head",
-                            "Review Required",
-                        )
-
-                else:
-                    df.at[i, "Transaction_Head"] = r.get(
-                        "Transaction_Head",
-                        "Review Required",
-                    )
-
+                df.at[i, "Transaction_Head"] = r.get(
+                    "Transaction_Head",
+                    "Review Required",
+                )
                 break
 
     return df
 
 
-# ---------- FILE UPLOAD ----------
+# -------- FILE UPLOAD --------
 uploaded_file = st.file_uploader(
     "Upload Bank Statement Excel",
-    type=["xlsx", "xls"]
+    type=["xlsx", "xls"],
 )
 
 if uploaded_file:
@@ -146,7 +138,7 @@ if uploaded_file:
 
     st.success("Classification completed.")
 
-    # Excel download
+    # Download Excel
     buffer = BytesIO()
     df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
@@ -155,5 +147,5 @@ if uploaded_file:
         label="Download Classified Statement",
         data=buffer,
         file_name="classified_statement.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
