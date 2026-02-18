@@ -12,7 +12,9 @@ st.title("Bank Statement Classification Tool")
 def clean_text(text):
     if pd.isna(text):
         return ""
-    return str(text).upper().strip()
+    text = str(text).replace("\n", " ")   # remove line breaks
+    text = re.sub(r"\s+", " ", text)
+    return text.upper().strip()
 
 
 # -------- DETECT NARRATION COLUMN --------
@@ -38,9 +40,7 @@ def extract_client_name(narration):
 
     narration = clean_text(narration)
 
-    # ===== SBI SPECIFIC UPI FORMAT =====
-    # Example:
-    # DEP TFR UPI/CR/409293829100/METRO
+    # SBI UPI format
     if "UPI/" in narration:
         parts = narration.split("/")
 
@@ -53,13 +53,13 @@ def extract_client_name(narration):
             if p.isdigit():
                 continue
 
-            if p in ["CR", "DR", "REV", "UPI"]:
+            if p in ["CR", "DR", "UPI", "REV"]:
                 continue
 
             if len(p) > 2:
                 return re.sub(r"[^A-Z ]", "", p).strip()
 
-    # ===== GENERIC CLEANUP =====
+    # Generic cleanup
     narration = re.sub(
         r"\b(DR|CR|UPI|IMPS|NEFT|RTGS|BANK|TXN|REF|MB|AXOMB|BRN|CLG)\b",
         "",
@@ -104,22 +104,35 @@ def classify_transactions(df):
 
         narration = clean_text(row[narration_col])
 
-        # First try extracting name
-        name = extract_client_name(narration)
-        if name:
-            df.at[i, "Transaction_Head"] = name
-            continue
+        # STEP 1 → APPLY RULES FIRST
+        matched = False
 
-        # Otherwise use rules
         for _, r in rules.iterrows():
             keyword = clean_text(r.get("Keyword", ""))
 
             if keyword and keyword in narration:
-                df.at[i, "Transaction_Head"] = r.get(
-                    "Transaction_Head",
-                    "Review Required",
-                )
+
+                head = r.get("Transaction_Head", "Review Required")
+                extract_flag = str(
+                    r.get("Extract_Client_Name", "NO")
+                ).upper()
+
+                # Only extract name if rule says YES
+                if extract_flag == "YES":
+                    name = extract_client_name(narration)
+                    if name:
+                        df.at[i, "Transaction_Head"] = name
+                    else:
+                        df.at[i, "Transaction_Head"] = head
+                else:
+                    df.at[i, "Transaction_Head"] = head
+
+                matched = True
                 break
+
+        # STEP 2 → IF NO RULE MATCHED
+        if not matched:
+            df.at[i, "Transaction_Head"] = "Review Required"
 
     return df
 
@@ -138,7 +151,10 @@ if uploaded_file:
 
     st.success("Classification completed.")
 
-    # Download Excel
+    # dynamic filename
+    original_name = uploaded_file.name.split(".")[0]
+    output_name = f"{original_name}_classified.xlsx"
+
     buffer = BytesIO()
     df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
@@ -146,6 +162,6 @@ if uploaded_file:
     st.download_button(
         label="Download Classified Statement",
         data=buffer,
-        file_name="classified_statement.xlsx",
+        file_name=output_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
