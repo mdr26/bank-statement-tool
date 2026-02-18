@@ -1,136 +1,151 @@
 import streamlit as st
 import pandas as pd
-import io
+import re
+import os
+from io import BytesIO
 
-st.title("🏥 Hospital Billing Cleaner Tool")
 
+st.title("Bank Statement Classification Tool")
+
+
+# -------- CLEAN TEXT --------
+def clean_text(text):
+    if pd.isna(text):
+        return ""
+    return str(text).upper().strip()
+
+
+# -------- DETECT NARRATION COLUMN --------
+def find_narration_column(df):
+    possible_cols = [
+        "NARRATION",
+        "DESCRIPTION",
+        "REMARKS",
+        "PARTICULARS",
+        "TRANSACTION DETAILS",
+        "TXN REMARKS",
+    ]
+
+    for col in df.columns:
+        if clean_text(col) in possible_cols:
+            return col
+
+    return None
+
+
+# -------- CLIENT NAME EXTRACTION --------
+def extract_client_name(narration):
+
+    narration = clean_text(narration)
+
+    # ===== SBI SPECIFIC UPI FORMAT =====
+    # Example:
+    # DEP TFR UPI/CR/409293829100/METRO
+    if "UPI/" in narration:
+        parts = narration.split("/")
+
+        for p in reversed(parts):
+            p = p.strip()
+
+            if not p:
+                continue
+
+            if p.isdigit():
+                continue
+
+            if p in ["CR", "DR", "REV", "UPI"]:
+                continue
+
+            if len(p) > 2:
+                return re.sub(r"[^A-Z ]", "", p).strip()
+
+    # ===== GENERIC CLEANUP =====
+    narration = re.sub(
+        r"\b(DR|CR|UPI|IMPS|NEFT|RTGS|BANK|TXN|REF|MB|AXOMB|BRN|CLG)\b",
+        "",
+        narration,
+    )
+
+    narration = re.sub(r"\d+", "", narration)
+    narration = re.sub(r"[@*/\-_:]", " ", narration)
+    narration = re.sub(r"\s+", " ", narration).strip()
+
+    words = narration.split()
+
+    if len(words) >= 2:
+        return " ".join(words[:3])
+
+    return ""
+
+
+# -------- CLASSIFICATION --------
+def classify_transactions(df):
+
+    rules_path = "key words.xlsx"
+
+    if not os.path.exists(rules_path):
+        st.warning("Rules Excel not found.")
+        df["Transaction_Head"] = "Review Required"
+        return df
+
+    rules = pd.read_excel(rules_path)
+    rules.columns = rules.columns.str.strip()
+
+    narration_col = find_narration_column(df)
+
+    if narration_col is None:
+        st.error("Narration column missing.")
+        df["Transaction_Head"] = "Review Required"
+        return df
+
+    df["Transaction_Head"] = "Review Required"
+
+    for i, row in df.iterrows():
+
+        narration = clean_text(row[narration_col])
+
+        # First try extracting name
+        name = extract_client_name(narration)
+        if name:
+            df.at[i, "Transaction_Head"] = name
+            continue
+
+        # Otherwise use rules
+        for _, r in rules.iterrows():
+            keyword = clean_text(r.get("Keyword", ""))
+
+            if keyword and keyword in narration:
+                df.at[i, "Transaction_Head"] = r.get(
+                    "Transaction_Head",
+                    "Review Required",
+                )
+                break
+
+    return df
+
+
+# -------- FILE UPLOAD --------
 uploaded_file = st.file_uploader(
-    "Upload messy hospital billing Excel file",
-    type=["xls", "xlsx"]
+    "Upload Bank Statement Excel",
+    type=["xlsx", "xls"],
 )
-
-
-FINAL_COLUMNS = [
-    "Company",
-    "Financial Category",
-    "Medical No.",
-    "Act No.",
-    "Case No.",
-    "Patients Name",
-    "Admission Date",
-    "Discharge Date",
-    "Length of Stay",
-    "Total Price",
-    "Total",
-    "Comp. Part",
-    "Patient",
-    "Type"
-]
-
-
-def is_patient_row(row):
-    return pd.notna(row.iloc[0]) and str(row.iloc[0]).isdigit()
-
-
-def clean_file(file):
-
-    df = pd.read_excel(file, header=None)
-    df = df.dropna(how="all").reset_index(drop=True)
-
-    cleaned_rows = []
-    current_company = None
-    current_category = None
-
-    for idx, row in df.iterrows():
-
-        row_text = " ".join(
-            [str(x) for x in row if pd.notna(x)]
-        ).lower()
-
-        # Financial category block
-        if "financial category" in row_text or "finanial category" in row_text:
-
-            # Company from row above (skip subtotal rows)
-            if idx > 0:
-                prev_row = df.iloc[idx - 1]
-                prev_text = " ".join(
-                    [str(x) for x in prev_row if pd.notna(x)]
-                ).strip()
-
-                if prev_text and "sub-total" not in prev_text.lower():
-                    current_company = prev_text
-
-            # Extract category code
-            for cell in row:
-                if pd.notna(cell):
-                    text = str(cell).strip()
-                    if (
-                        "financial category" not in text.lower()
-                        and len(text) <= 15
-                    ):
-                        current_category = text
-                        break
-
-            continue
-
-        # Skip subtotal rows
-        if "sub-total" in row_text:
-            continue
-
-        # Patient rows
-        if is_patient_row(row):
-
-            admission = pd.to_datetime(
-                row.iloc[25], errors="coerce", dayfirst=True
-            )
-
-            discharge = pd.to_datetime(
-                row.iloc[33], errors="coerce", dayfirst=True
-            )
-
-            length_of_stay = None
-            if pd.notna(admission) and pd.notna(discharge):
-                length_of_stay = (discharge - admission).days
-
-            new_row = dict.fromkeys(FINAL_COLUMNS, None)
-
-            new_row["Company"] = current_company
-            new_row["Financial Category"] = current_category
-            new_row["Medical No."] = row.iloc[0]
-            new_row["Act No."] = row.iloc[5]
-            new_row["Case No."] = row.iloc[10]
-            new_row["Patients Name"] = row.iloc[14]
-            new_row["Admission Date"] = admission
-            new_row["Discharge Date"] = discharge
-            new_row["Length of Stay"] = length_of_stay
-            new_row["Total Price"] = row.iloc[36]
-            new_row["Total"] = row.iloc[37]
-            new_row["Comp. Part"] = row.iloc[39]
-            new_row["Patient"] = row.iloc[41]
-            new_row["Type"] = row.iloc[42]
-
-            cleaned_rows.append(new_row)
-
-    clean_df = pd.DataFrame(cleaned_rows).drop_duplicates()
-
-    return clean_df
-
 
 if uploaded_file:
 
-    cleaned_df = clean_file(uploaded_file)
+    df = pd.read_excel(uploaded_file)
 
-    st.success("✅ File cleaned successfully!")
+    df = classify_transactions(df)
 
-    st.dataframe(cleaned_df)
+    st.success("Classification completed.")
 
-    buffer = io.BytesIO()
-    cleaned_df.to_excel(buffer, index=False, engine="openpyxl")
+    # Download Excel
+    buffer = BytesIO()
+    df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
 
     st.download_button(
-        "📥 Download Cleaned Excel",
-        buffer,
-        "Cleaned_Billing.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        label="Download Classified Statement",
+        data=buffer,
+        file_name="classified_statement.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
