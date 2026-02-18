@@ -4,6 +4,7 @@ import re
 import os
 from io import BytesIO
 
+
 st.title("Bank Statement Classification Tool")
 
 
@@ -11,19 +12,23 @@ st.title("Bank Statement Classification Tool")
 def clean_text(text):
     if pd.isna(text):
         return ""
-    return str(text).upper().strip()
+
+    text = str(text).replace("\n", " ")  # remove line breaks
+    text = text.replace("\r", " ")
+    text = re.sub(r"\s+", " ", text)
+
+    return text.upper().strip()
 
 
-# -------- DETECT NARRATION COLUMN --------
+# -------- FIND NARRATION COLUMN --------
 def find_narration_column(df):
 
     possible_cols = [
         "NARRATION",
         "DESCRIPTION",
-        "REMARKS",
         "PARTICULARS",
+        "REMARKS",
         "TRANSACTION DETAILS",
-        "TXN REMARKS",
     ]
 
     for col in df.columns:
@@ -38,44 +43,22 @@ def extract_client_name(narration):
 
     narration = clean_text(narration)
 
-    # Split by / common in SBI/UPI
-    parts = re.split(r"[\/\-:]", narration)
+    # Remove banking noise words
+    narration = re.sub(
+        r"\b(DR|CR|UPI|IMPS|NEFT|RTGS|BANK|TXN|REF|MB|AXOMB|BRN|CLG)\b",
+        "",
+        narration,
+    )
 
-    cleaned = []
+    narration = re.sub(r"\d+", "", narration)
+    narration = re.sub(r"[@*/\-_:]", " ", narration)
+    narration = re.sub(r"\s+", " ", narration).strip()
 
-    for p in parts:
+    words = narration.split()
 
-        p = p.strip()
-
-        if not p:
-            continue
-
-        # Ignore technical words
-        if p in [
-            "UPI",
-            "IMPS",
-            "NEFT",
-            "RTGS",
-            "BANK",
-            "CR",
-            "DR",
-            "REF",
-            "TXN",
-            "MB",
-            "AXOMB",
-            "CLG",
-            "BRN",
-        ]:
-            continue
-
-        # Ignore numbers
-        if re.search(r"\d", p):
-            continue
-
-        cleaned.append(p)
-
-    if cleaned:
-        return cleaned[-1].title()
+    # Take first meaningful words as name
+    if len(words) >= 2:
+        return " ".join(words[:3])
 
     return ""
 
@@ -106,30 +89,22 @@ def classify_transactions(df):
 
         narration = clean_text(row[narration_col])
 
-        matched = False
+        # --- Name extraction first ---
+        name = extract_client_name(narration)
+        if name:
+            df.at[i, "Transaction_Head"] = name
+            continue
 
-        # ===== RULE MATCH FIRST =====
+        # --- Keyword rule fallback ---
         for _, r in rules.iterrows():
 
             keyword = clean_text(r.get("Keyword", ""))
-            head = r.get("Transaction_Head", "Review Required")
-            extract_flag = clean_text(r.get("Extract_Client_Name", "NO"))
 
             if keyword and keyword in narration:
-
-                matched = True
-
-                if extract_flag == "YES":
-                    name = extract_client_name(narration)
-                    df.at[i, "Transaction_Head"] = name if name else head
-                else:
-                    df.at[i, "Transaction_Head"] = head
-
+                df.at[i, "Transaction_Head"] = r.get(
+                    "Transaction_Head", "Review Required"
+                )
                 break
-
-        # ===== NO MATCH =====
-        if not matched:
-            df.at[i, "Transaction_Head"] = "Review Required"
 
     return df
 
@@ -148,6 +123,11 @@ if uploaded_file:
 
     st.success("Classification completed.")
 
+    # ===== AUTO FILE NAME =====
+    original_name = uploaded_file.name.split(".")[0]
+    output_name = f"{original_name}_classified.xlsx"
+
+    # ===== DOWNLOAD FILE =====
     buffer = BytesIO()
     df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
@@ -155,6 +135,6 @@ if uploaded_file:
     st.download_button(
         label="Download Classified Statement",
         data=buffer,
-        file_name="classified_statement.xlsx",
+        file_name=output_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
