@@ -4,7 +4,6 @@ import re
 import os
 from io import BytesIO
 
-
 st.title("Bank Statement Classification Tool")
 
 
@@ -17,6 +16,7 @@ def clean_text(text):
 
 # -------- DETECT NARRATION COLUMN --------
 def find_narration_column(df):
+
     possible_cols = [
         "NARRATION",
         "DESCRIPTION",
@@ -38,42 +38,44 @@ def extract_client_name(narration):
 
     narration = clean_text(narration)
 
-    # ===== SBI SPECIFIC UPI FORMAT =====
-    # Example:
-    # DEP TFR UPI/CR/409293829100/METRO
-    if "UPI/" in narration:
-        parts = narration.split("/")
+    # Split by / common in SBI/UPI
+    parts = re.split(r"[\/\-:]", narration)
 
-        for p in reversed(parts):
-            p = p.strip()
+    cleaned = []
 
-            if not p:
-                continue
+    for p in parts:
 
-            if p.isdigit():
-                continue
+        p = p.strip()
 
-            if p in ["CR", "DR", "REV", "UPI"]:
-                continue
+        if not p:
+            continue
 
-            if len(p) > 2:
-                return re.sub(r"[^A-Z ]", "", p).strip()
+        # Ignore technical words
+        if p in [
+            "UPI",
+            "IMPS",
+            "NEFT",
+            "RTGS",
+            "BANK",
+            "CR",
+            "DR",
+            "REF",
+            "TXN",
+            "MB",
+            "AXOMB",
+            "CLG",
+            "BRN",
+        ]:
+            continue
 
-    # ===== GENERIC CLEANUP =====
-    narration = re.sub(
-        r"\b(DR|CR|UPI|IMPS|NEFT|RTGS|BANK|TXN|REF|MB|AXOMB|BRN|CLG)\b",
-        "",
-        narration,
-    )
+        # Ignore numbers
+        if re.search(r"\d", p):
+            continue
 
-    narration = re.sub(r"\d+", "", narration)
-    narration = re.sub(r"[@*/\-_:]", " ", narration)
-    narration = re.sub(r"\s+", " ", narration).strip()
+        cleaned.append(p)
 
-    words = narration.split()
-
-    if len(words) >= 2:
-        return " ".join(words[:3])
+    if cleaned:
+        return cleaned[-1].title()
 
     return ""
 
@@ -104,22 +106,30 @@ def classify_transactions(df):
 
         narration = clean_text(row[narration_col])
 
-        # First try extracting name
-        name = extract_client_name(narration)
-        if name:
-            df.at[i, "Transaction_Head"] = name
-            continue
+        matched = False
 
-        # Otherwise use rules
+        # ===== RULE MATCH FIRST =====
         for _, r in rules.iterrows():
+
             keyword = clean_text(r.get("Keyword", ""))
+            head = r.get("Transaction_Head", "Review Required")
+            extract_flag = clean_text(r.get("Extract_Client_Name", "NO"))
 
             if keyword and keyword in narration:
-                df.at[i, "Transaction_Head"] = r.get(
-                    "Transaction_Head",
-                    "Review Required",
-                )
+
+                matched = True
+
+                if extract_flag == "YES":
+                    name = extract_client_name(narration)
+                    df.at[i, "Transaction_Head"] = name if name else head
+                else:
+                    df.at[i, "Transaction_Head"] = head
+
                 break
+
+        # ===== NO MATCH =====
+        if not matched:
+            df.at[i, "Transaction_Head"] = "Review Required"
 
     return df
 
@@ -138,7 +148,6 @@ if uploaded_file:
 
     st.success("Classification completed.")
 
-    # Download Excel
     buffer = BytesIO()
     df.to_excel(buffer, index=False, engine="openpyxl")
     buffer.seek(0)
