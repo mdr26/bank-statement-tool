@@ -29,9 +29,17 @@ LEDGER_GROUPS = sorted([
 # --------------------------------------------------
 
 STOP_WORDS = {
-"UPI","IMPS","NEFT","RTGS","CR","DR","BANK",
+"UPI","UPIOUT","IMPS","NEFT","RTGS","CR","DR","BANK",
 "TRANSFER","PAYMENT","SUCCESS","INFO","DETAILS",
-"TRANSACTION","VALUE","DATE"
+"TRANSACTION","VALUE","DATE",
+
+"IFI","IFO","YBL","FTB","AXISB","IBL","AXL",
+"PAYTM","ACHDR","ATM","EBIZ","DIGITB","VJSERN",
+"MBK","MUMBAI","BOBCARD","FEDERAL","MICR","TEX",
+"CLG","SBIN","HDFC","FDRL","ICIC","SOUTH","ICI",
+"CBIN","USI","AXI","TXN","UTIB","TMBLH","TMBLN",
+"EBANK","UBIN","FBBT","SIBLN","SBI","FDRLH",
+"MBANK","CNRB" , "CHN" , "CHQ" , "AXIS" , "MOB" ,   
 }
 
 # --------------------------------------------------
@@ -59,7 +67,16 @@ def extract_head(text, freq):
         if len(w) < 3:
             continue
 
+        # Ignore stopwords
         if w in STOP_WORDS:
+            continue
+
+        # Ignore UPI handles like OKSBI OKAXIS
+        if w.startswith("OK"):
+            continue
+
+        # Ignore tokens containing numbers
+        if any(char.isdigit() for char in w):
             continue
 
         candidates.append((w, freq.get(w,0)))
@@ -67,7 +84,7 @@ def extract_head(text, freq):
     if candidates:
         return max(candidates, key=lambda x: x[1])[0]
 
-    return "UNKNOWN"
+    return "SUSPENSE"
 
 # --------------------------------------------------
 # FIND NARRATION COLUMN
