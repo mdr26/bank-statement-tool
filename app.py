@@ -4,361 +4,285 @@ import re
 from collections import Counter
 from io import BytesIO
 
+st.set_page_config(page_title="Bank Statement Intelligent Classifier", layout="wide")
 
-# -----------------------------------------------------------
-# App Configuration
-# -----------------------------------------------------------
+st.title("Bank Statement Classifier")
 
-st.set_page_config(
-    page_title="Bank Statement Classifier",
-    layout="wide"
-)
+# --------------------------------------------------
+# TALLY LEDGER GROUPS
+# --------------------------------------------------
 
-st.title("Bank Statement Intelligent Classifier")
+LEDGER_GROUPS = sorted([
+"Bank Accounts","Bank OCC A/c","Bank OD A/c","Branch / Divisions",
+"Capital Account","Cash-in-Hand","Current Assets","Current Liabilities",
+"Deposits (Asset)","Direct Expenses","Direct Incomes","Duties & Taxes",
+"Expenses (Direct)","Expenses (Indirect)","Fixed Assets","Income (Direct)",
+"Income (Indirect)","Indirect Expenses","Indirect Incomes","Investments",
+"Loans & Advances (Asset)","Loans (Liability)","Misc. Expenses (ASSET)",
+"Provisions","Purchase Accounts","Reserves & Surplus","Retained Earnings",
+"Sales Accounts","Secured Loans","Stock-in-Hand","Sundry Creditors",
+"Sundry Debtors","Suspense A/c","Unsecured Loans"
+])
 
-
-# -----------------------------------------------------------
-# Session State
-# -----------------------------------------------------------
-
-if "ledger_map" not in st.session_state:
-    st.session_state.ledger_map = {}
-
-if "merged_heads" not in st.session_state:
-    st.session_state.merged_heads = {}
-
-
-# -----------------------------------------------------------
-# Utility Functions
-# -----------------------------------------------------------
-
-def find_narration_column(df: pd.DataFrame) -> str:
-    """Identify narration/description column."""
-
-    candidates = [
-        "NARRATION", "DESCRIPTION", "PARTICULARS",
-        "DETAILS", "REMARKS", "DESC"
-    ]
-
-    for col in df.columns:
-        if col.upper() in candidates:
-            return col
-
-    for col in df.columns:
-        if "NARR" in col.upper() or "DESC" in col.upper():
-            return col
-
-    return df.select_dtypes(include="object").columns[0]
-
-
-def clean_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert numeric columns safely."""
-
-    for col in df.columns:
-        if any(x in col.upper() for x in ["WITHDRAW", "DEBIT", "DEPOSIT", "CREDIT", "BALANCE"]):
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace(",", "", regex=False)
-            )
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df
-
-
-def flag_duplicates(df: pd.DataFrame) -> pd.DataFrame:
-    """Mark possible duplicate transactions."""
-
-    cols = []
-
-    for col in df.columns:
-        if any(x in col.upper() for x in ["DATE", "WITHDRAW", "DEPOSIT", "NARR"]):
-            cols.append(col)
-
-    df["Possible_Duplicate"] = df.duplicated(subset=cols, keep=False)
-
-    return df
-
-
-def clean_alpha(text: str) -> str:
-    return re.sub(r'[^A-Z]', '', text)
-
-
-# -----------------------------------------------------------
-# Transaction Head Extraction
-# -----------------------------------------------------------
+# --------------------------------------------------
+# STOP WORDS
+# --------------------------------------------------
 
 STOP_WORDS = {
-    "UPI","IMPS","NEFT","RTGS","CR","DR",
-    "BANK","PAYMENT","TRANSFER",
-    "CHARGE","CHARGES","FEE",
-
-    "ENTER","SUCCESS","TRANSACTION",
-    "REFERENCE","REF","DETAIL","DETAILS",
-    "VALUE","DATE","INFO","MESSAGE",
-    "TRF","BY","TO","FROM","OF","THE"
+"UPI","IMPS","NEFT","RTGS","CR","DR","BANK",
+"TRANSFER","PAYMENT","SUCCESS","INFO","DETAILS",
+"TRANSACTION","VALUE","DATE"
 }
 
-BANK_PREFIXES = (
-    "OK","SBIN","HDFC","ICICI","UBIN",
-    "AXIS","BARB","YESB","FDRL",
-    "YBL","IBL","UPI"
-)
+# --------------------------------------------------
+# CLEAN WORD
+# --------------------------------------------------
 
-def score_token(token, position, total_words, freq):
-    score = 0
+def clean_word(text):
+    return re.sub(r'[^A-Z]', '', text)
 
-    if 4 <= len(token) <= 15:
-        score += 2
+# --------------------------------------------------
+# EXTRACT TRANSACTION HEAD
+# --------------------------------------------------
 
-    if freq > 2:
-        score += 3
+def extract_head(text, freq):
 
-    center = total_words / 2
-    if abs(position - center) <= 2:
-        score += 2
-
-    if token in STOP_WORDS:
-        score -= 5
-
-    if token.startswith(BANK_PREFIXES):
-        score -= 5
-
-    if any(c.isdigit() for c in token):
-        score -= 3
-
-    return score
-
-
-def extract_transaction_head(narration, word_freq):
-
-    text = str(narration).upper()
-    words = re.sub(r'[^A-Z0-9]', ' ', text).split()
+    text = str(text).upper()
+    words = re.sub(r'[^A-Z]', ' ', text).split()
 
     candidates = []
 
-    for i, word in enumerate(words):
+    for w in words:
 
-        token = clean_alpha(word)
+        w = clean_word(w)
 
-        if len(token) < 3:
+        if len(w) < 3:
             continue
 
-        score = score_token(token, i, len(words), word_freq.get(token, 0))
-        candidates.append((token, score))
+        if w in STOP_WORDS:
+            continue
+
+        candidates.append((w, freq.get(w,0)))
 
     if candidates:
         return max(candidates, key=lambda x: x[1])[0]
 
     return "UNKNOWN"
 
+# --------------------------------------------------
+# FIND NARRATION COLUMN
+# --------------------------------------------------
 
-# -----------------------------------------------------------
-# File Upload
-# -----------------------------------------------------------
+def find_narration(df):
 
-file = st.file_uploader("Upload Bank Statement", type=["xlsx", "xls", "csv"])
+    for col in df.columns:
+        c = col.upper()
+        if "NARR" in c or "PARTICULAR" in c or "DESC" in c:
+            return col
+
+    text_cols = df.select_dtypes(include="object")
+    return text_cols.columns[0]
+
+# --------------------------------------------------
+# FILE UPLOAD
+# --------------------------------------------------
+
+file = st.file_uploader("Upload Bank Statement", type=["xlsx","xls","csv"])
 
 if file:
-
-    bank_ledger = file.name.split(".")[0].upper()
 
     if file.name.endswith(".csv"):
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file)
 
-    narration_col = find_narration_column(df)
+    narration_col = find_narration(df)
 
     st.success(f"Narration column detected: {narration_col}")
 
-    df = clean_numeric_columns(df)
-    df = flag_duplicates(df)
+# --------------------------------------------------
+# WORD FREQUENCY
+# --------------------------------------------------
 
-    # Build word frequency
-    words = []
+    words=[]
+
     for val in df[narration_col]:
         words.extend(re.sub(r'[^A-Z]', ' ', str(val).upper()).split())
 
-    word_freq = Counter(words)
+    freq = Counter(words)
 
-    # Extract transaction heads
+# --------------------------------------------------
+# TRANSACTION HEAD
+# --------------------------------------------------
+
     df["Transaction_Head"] = df[narration_col].apply(
-        lambda x: extract_transaction_head(x, word_freq)
+        lambda x: extract_head(x,freq)
     )
 
-    # Apply merge corrections
-    for old, new in st.session_state.merged_heads.items():
-        df.loc[df["Transaction_Head"] == old, "Transaction_Head"] = new
+# --------------------------------------------------
+# SESSION STATE
+# --------------------------------------------------
 
-    # -------------------------------------------------------
-    # Merge Transaction Heads
-    # -------------------------------------------------------
+    if "merge_map" not in st.session_state:
+        st.session_state.merge_map = {}
+
+    if "ledger_map" not in st.session_state:
+        st.session_state.ledger_map = {}
+
+    if "ledger_group_map" not in st.session_state:
+        st.session_state.ledger_group_map = {}
+
+# --------------------------------------------------
+# MERGE TRANSACTION HEADS
+# --------------------------------------------------
 
     st.subheader("Merge Transaction Heads")
 
-    unique_heads = sorted(df["Transaction_Head"].unique())
+    heads = sorted(df["Transaction_Head"].unique())
 
-    merge_from = st.multiselect(
-        "Select heads to merge",
-        unique_heads
-    )
+    merge_select = st.multiselect("Select heads to merge", heads)
 
     merge_into = st.text_input("Merge into")
 
-    if st.button("Merge Heads") and merge_into:
+    if st.button("Merge Heads"):
 
-        for head in merge_from:
-            st.session_state.merged_heads[head] = merge_into
+        for h in merge_select:
+            st.session_state.merge_map[h] = merge_into
 
-        st.rerun()
+        df["Transaction_Head"] = df["Transaction_Head"].replace(st.session_state.merge_map)
 
-    # -------------------------------------------------------
-    # Group Summary
-    # -------------------------------------------------------
+        st.success("Heads merged")
 
-    group_summary = (
-        df.groupby("Transaction_Head")
-        .size()
-        .reset_index(name="Transactions")
-        .sort_values("Transactions", ascending=False)
-    )
+# --------------------------------------------------
+# GROUP COUNTS
+# --------------------------------------------------
 
-    group_summary["Ledger"] = group_summary["Transaction_Head"].map(
-        st.session_state.ledger_map
-    ).fillna("")
+    group_counts = df["Transaction_Head"].value_counts().reset_index()
+    group_counts.columns=["Transaction_Head","Transactions"]
 
-    group_summary["Ledger Group"] = ""
+# --------------------------------------------------
+# MAJOR / MINOR GROUPS
+# --------------------------------------------------
 
-    major_groups = group_summary[group_summary["Transactions"] >= 3]
-    minor_groups = group_summary[group_summary["Transactions"] < 3]
+    major = group_counts[group_counts["Transactions"]>=5]
+    minor = group_counts[group_counts["Transactions"]<5]
+
+# --------------------------------------------------
+# DISPLAY GROUPS
+# --------------------------------------------------
 
     st.subheader("Major Groups")
-    edited_major = st.data_editor(major_groups, use_container_width=True)
+
+    major_display = major.copy()
+    major_display["Ledger"] = major_display["Transaction_Head"].map(st.session_state.ledger_map)
+
+    st.dataframe(major_display,use_container_width=True)
 
     st.subheader("Minor Groups")
-    edited_minor = st.data_editor(minor_groups, use_container_width=True)
 
-    edited_groups = pd.concat([edited_major, edited_minor])
+    minor_display = minor.copy()
+    minor_display["Ledger"] = minor_display["Transaction_Head"].map(st.session_state.ledger_map)
 
-    # -------------------------------------------------------
-    # Bulk Ledger Assignment
-    # -------------------------------------------------------
+    st.dataframe(minor_display,use_container_width=True)
+
+# --------------------------------------------------
+# BULK LEDGER ASSIGNMENT
+# --------------------------------------------------
 
     st.subheader("Bulk Ledger Assignment")
 
-    unassigned = [
-        g for g in group_summary["Transaction_Head"]
-        if g not in st.session_state.ledger_map
-    ]
+    groups = group_counts["Transaction_Head"].tolist()
 
-    selected_groups = st.multiselect(
-        "Select Groups",
-        unassigned
-    )
+    selected = st.multiselect("Select Groups",groups)
 
-    ledger_input = st.text_input("Ledger Name")
+    ledger_name = st.text_input("Ledger Name")
 
-    if st.button("Apply Ledger") and ledger_input:
+    ledger_group = st.selectbox("Ledger Group",LEDGER_GROUPS)
 
-        for g in selected_groups:
-            st.session_state.ledger_map[g] = ledger_input
+    if st.button("Apply Ledger"):
 
-        st.rerun()
+        for g in selected:
 
-    if st.button("Reset Ledgers"):
-        st.session_state.ledger_map = {}
-        st.rerun()
+            st.session_state.ledger_map[g]=ledger_name
+            st.session_state.ledger_group_map[g]=ledger_group
 
-    st.info(
-        f"Assigned Groups: {len(st.session_state.ledger_map)} | "
-        f"Remaining Groups: {len(unassigned)}"
-    )
+        st.success("Ledger Assigned")
 
-    # -------------------------------------------------------
-    # Apply Ledger Mapping
-    # -------------------------------------------------------
+# --------------------------------------------------
+# APPLY LEDGER
+# --------------------------------------------------
 
-    df["Ledger"] = df["Transaction_Head"].map(st.session_state.ledger_map)
+    df["Ledger"]=df["Transaction_Head"].map(st.session_state.ledger_map)
+    df["Ledger Group"]=df["Transaction_Head"].map(st.session_state.ledger_group_map)
 
-    # -------------------------------------------------------
-    # Editable Transactions
-    # -------------------------------------------------------
+# --------------------------------------------------
+# TRANSACTIONS TABLE
+# --------------------------------------------------
 
     st.subheader("Transactions")
 
-    edited_df = st.data_editor(df, use_container_width=True)
+    edited_df = st.data_editor(df,use_container_width=True)
 
-    # -------------------------------------------------------
-    # Validation
-    # -------------------------------------------------------
+# --------------------------------------------------
+# FIND AMOUNT COLUMNS
+# --------------------------------------------------
 
-    missing = edited_df[
-        edited_df["Ledger"].isna() | (edited_df["Ledger"] == "")
-    ]
-
-    if len(missing) > 0:
-        st.warning("Some transactions have no ledger assigned.")
-        st.dataframe(missing[["Transaction_Head", narration_col]])
-
-    # -------------------------------------------------------
-    # Classified Download
-    # -------------------------------------------------------
-
-    buffer = BytesIO()
-    edited_df.to_csv(buffer, index=False)
-    buffer.seek(0)
-
-    st.download_button(
-        "Download Classified File",
-        buffer,
-        "classified_transactions.csv",
-        "text/csv"
-    )
-
-    # -------------------------------------------------------
-    # Tally Export
-    # -------------------------------------------------------
-
-    withdraw_col = None
-    deposit_col = None
-    date_col = None
+    withdraw_col=None
+    deposit_col=None
+    date_col=None
 
     for col in edited_df.columns:
 
-        if "WITHDRAW" in col.upper() or "DEBIT" in col.upper():
-            withdraw_col = col
+        c=col.upper()
 
-        if "DEPOSIT" in col.upper() or "CREDIT" in col.upper():
-            deposit_col = col
+        if any(x in c for x in ["WITHDRAW","DEBIT","DR"]):
+            withdraw_col=col
 
-        if "DATE" in col.upper():
-            date_col = col
+        if any(x in c for x in ["DEPOSIT","CREDIT","CR"]):
+            deposit_col=col
 
-    tally_df = pd.DataFrame()
+        if "DATE" in c:
+            date_col=col
 
-    tally_df["Date"] = edited_df[date_col]
-    tally_df["Ledger"] = edited_df["Ledger"]
-    tally_df["Ledger Group"] = ""
-    tally_df["Narration"] = edited_df[narration_col]
+# --------------------------------------------------
+# TALLY EXPORT
+# --------------------------------------------------
 
-    tally_df["Amount"] = edited_df[withdraw_col].fillna(0)
-    tally_df["Amount2"] = edited_df[deposit_col].fillna(0)
+    tally_df=pd.DataFrame()
 
-    tally_df["Bank Ledger"] = bank_ledger
+    tally_df["Date"]=edited_df[date_col]
+    tally_df["Ledger"]=edited_df["Ledger"]
+    tally_df["Ledger Group"]=edited_df["Ledger Group"]
+    tally_df["Narration"]=edited_df[narration_col]
 
-    tally_df["Voucher Type"] = tally_df.apply(
-        lambda r: "Payment" if r["Amount"] > 0 else "Receipt",
+    tally_df["Debit"]=pd.to_numeric(
+        edited_df[withdraw_col].astype(str).str.replace(",",""),
+        errors="coerce"
+    ).fillna(0)
+
+    tally_df["Credit"]=pd.to_numeric(
+        edited_df[deposit_col].astype(str).str.replace(",",""),
+        errors="coerce"
+    ).fillna(0)
+
+    tally_df["Bank Ledger"]=file.name.upper()
+
+    tally_df["Voucher Type"]=tally_df.apply(
+        lambda r: "Payment" if r["Debit"]>0 else "Receipt",
         axis=1
     )
 
-    buffer2 = BytesIO()
-    tally_df.to_csv(buffer2, index=False)
-    buffer2.seek(0)
+# --------------------------------------------------
+# DOWNLOAD
+# --------------------------------------------------
+
+    buffer=BytesIO()
+    tally_df.to_csv(buffer,index=False)
+    buffer.seek(0)
 
     st.download_button(
         "Download Tally Import File",
-        buffer2,
+        buffer,
         "tally_import.csv",
         "text/csv"
     )
