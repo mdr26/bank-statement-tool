@@ -3,13 +3,79 @@ import pandas as pd
 import re
 from collections import Counter
 from io import BytesIO
+import sqlite3
 
 st.set_page_config(page_title="Bank Statement Intelligent Classifier", layout="wide")
 
 st.title("Bank Statement Classifier")
 
 # --------------------------------------------------
-# TALLY LEDGER GROUPS
+# DATABASE SETUP
+# --------------------------------------------------
+
+def get_connection():
+    return sqlite3.connect("stopwords.db", check_same_thread=False)
+
+def initialize_db():
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stopwords (
+            word TEXT PRIMARY KEY
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+initialize_db()
+
+# --------------------------------------------------
+# LOAD STOPWORDS
+# --------------------------------------------------
+
+def load_stopwords():
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT word FROM stopwords")
+
+    rows = cursor.fetchall()
+
+    conn.close()
+
+    return set([r[0].upper() for r in rows])
+
+STOP_WORDS = load_stopwords()
+
+# --------------------------------------------------
+# ADD STOPWORD
+# --------------------------------------------------
+
+def add_stopword(word):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "INSERT OR IGNORE INTO stopwords(word) VALUES(?)",
+        (word.upper(),)
+    )
+
+    conn.commit()
+    conn.close()
+
+# --------------------------------------------------
+# UNKNOWN WORD LOG
+# --------------------------------------------------
+
+unknown_words = set()
+
+# --------------------------------------------------
+# LEDGER GROUPS
 # --------------------------------------------------
 
 LEDGER_GROUPS = sorted([
@@ -23,24 +89,6 @@ LEDGER_GROUPS = sorted([
 "Sales Accounts","Secured Loans","Stock-in-Hand","Sundry Creditors",
 "Sundry Debtors","Suspense A/c","Unsecured Loans"
 ])
-
-# --------------------------------------------------
-# STOP WORDS
-# --------------------------------------------------
-
-STOP_WORDS = {
-"UPI","UPIOUT","IMPS","NEFT","RTGS","CR","DR","BANK",
-"TRANSFER","PAYMENT","SUCCESS","INFO","DETAILS",
-"TRANSACTION","VALUE","DATE",
-
-"IFI","IFO","YBL","FTB","AXISB","IBL","AXL",
-"PAYTM","ACHDR","ATM","EBIZ","DIGITB","VJSERN",
-"MBK","MUMBAI","BOBCARD","FEDERAL","MICR","TEX",
-"CLG","SBIN","HDFC","FDRL","ICIC","SOUTH","ICI",
-"CBIN","USI","AXI","TXN","UTIB","TMBLH","TMBLN",
-"EBANK","UBIN","FBBT","SIBLN","SBI","FDRLH",
-"MBANK","CNRB" , "CHN" , "CHQ" , "AXIS" , "MOB" ,   
-}
 
 # --------------------------------------------------
 # CLEAN WORD
@@ -62,24 +110,24 @@ def extract_head(text, freq):
 
     for w in words:
 
-        w = clean_word(w)
+        w_clean = clean_word(w)
 
-        if len(w) < 3:
+        if len(w_clean) < 3:
             continue
 
-        # Ignore stopwords
-        if w in STOP_WORDS:
+        if w_clean in STOP_WORDS:
             continue
 
-        # Ignore UPI handles like OKSBI OKAXIS
-        if w.startswith("OK"):
+        if w_clean.startswith("OK"):
             continue
 
-        # Ignore tokens containing numbers
-        if any(char.isdigit() for char in w):
+        if any(char.isdigit() for char in w_clean):
             continue
 
-        candidates.append((w, freq.get(w,0)))
+        if len(w_clean) >= 4 and freq.get(w_clean,0) < 3:
+            unknown_words.add(w_clean)
+
+        candidates.append((w_clean, freq.get(w_clean,0)))
 
     if candidates:
         return max(candidates, key=lambda x: x[1])[0]
@@ -93,11 +141,14 @@ def extract_head(text, freq):
 def find_narration(df):
 
     for col in df.columns:
+
         c = col.upper()
+
         if "NARR" in c or "PARTICULAR" in c or "DESC" in c:
             return col
 
     text_cols = df.select_dtypes(include="object")
+
     return text_cols.columns[0]
 
 # --------------------------------------------------
@@ -121,10 +172,13 @@ if file:
 # WORD FREQUENCY
 # --------------------------------------------------
 
-    words=[]
+    words = []
 
     for val in df[narration_col]:
-        words.extend(re.sub(r'[^A-Z]', ' ', str(val).upper()).split())
+
+        words.extend(
+            re.sub(r'[^A-Z]', ' ', str(val).upper()).split()
+        )
 
     freq = Counter(words)
 
@@ -135,6 +189,28 @@ if file:
     df["Transaction_Head"] = df[narration_col].apply(
         lambda x: extract_head(x,freq)
     )
+
+# --------------------------------------------------
+# POSSIBLE STOPWORDS
+# --------------------------------------------------
+
+    if unknown_words:
+
+        st.subheader("Possible Stopwords (Review)")
+
+        for word in sorted(unknown_words):
+
+            col1, col2 = st.columns([5,1])
+
+            col1.write(word)
+
+            if col2.button("➕", key=f"add_{word}"):
+
+                add_stopword(word)
+
+                st.success(f"{word} added to stopwords")
+
+                st.rerun()
 
 # --------------------------------------------------
 # SESSION STATE
@@ -150,7 +226,7 @@ if file:
         st.session_state.ledger_group_map = {}
 
 # --------------------------------------------------
-# MERGE TRANSACTION HEADS
+# MERGE HEADS
 # --------------------------------------------------
 
     st.subheader("Merge Transaction Heads")
@@ -164,9 +240,12 @@ if file:
     if st.button("Merge Heads"):
 
         for h in merge_select:
+
             st.session_state.merge_map[h] = merge_into
 
-        df["Transaction_Head"] = df["Transaction_Head"].replace(st.session_state.merge_map)
+        df["Transaction_Head"] = df["Transaction_Head"].replace(
+            st.session_state.merge_map
+        )
 
         st.success("Heads merged")
 
@@ -174,15 +253,20 @@ if file:
 # GROUP COUNTS
 # --------------------------------------------------
 
-    group_counts = df["Transaction_Head"].value_counts().reset_index()
-    group_counts.columns=["Transaction_Head","Transactions"]
+    group_counts = (
+        df["Transaction_Head"]
+        .value_counts()
+        .reset_index()
+    )
+
+    group_counts.columns = ["Transaction_Head","Transactions"]
 
 # --------------------------------------------------
-# MAJOR / MINOR GROUPS
+# MAJOR / MINOR
 # --------------------------------------------------
 
-    major = group_counts[group_counts["Transactions"]>=5]
-    minor = group_counts[group_counts["Transactions"]<5]
+    major = group_counts[group_counts["Transactions"] >= 5]
+    minor = group_counts[group_counts["Transactions"] < 5]
 
 # --------------------------------------------------
 # DISPLAY GROUPS
@@ -191,37 +275,45 @@ if file:
     st.subheader("Major Groups")
 
     major_display = major.copy()
-    major_display["Ledger"] = major_display["Transaction_Head"].map(st.session_state.ledger_map)
 
-    st.dataframe(major_display,use_container_width=True)
+    major_display["Ledger"] = (
+        major_display["Transaction_Head"]
+        .map(st.session_state.ledger_map)
+    )
+
+    st.dataframe(major_display, use_container_width=True)
 
     st.subheader("Minor Groups")
 
     minor_display = minor.copy()
-    minor_display["Ledger"] = minor_display["Transaction_Head"].map(st.session_state.ledger_map)
 
-    st.dataframe(minor_display,use_container_width=True)
+    minor_display["Ledger"] = (
+        minor_display["Transaction_Head"]
+        .map(st.session_state.ledger_map)
+    )
+
+    st.dataframe(minor_display, use_container_width=True)
 
 # --------------------------------------------------
-# BULK LEDGER ASSIGNMENT
+# BULK LEDGER
 # --------------------------------------------------
 
     st.subheader("Bulk Ledger Assignment")
 
     groups = group_counts["Transaction_Head"].tolist()
 
-    selected = st.multiselect("Select Groups",groups)
+    selected = st.multiselect("Select Groups", groups)
 
     ledger_name = st.text_input("Ledger Name")
 
-    ledger_group = st.selectbox("Ledger Group",LEDGER_GROUPS)
+    ledger_group = st.selectbox("Ledger Group", LEDGER_GROUPS)
 
     if st.button("Apply Ledger"):
 
         for g in selected:
 
-            st.session_state.ledger_map[g]=ledger_name
-            st.session_state.ledger_group_map[g]=ledger_group
+            st.session_state.ledger_map[g] = ledger_name
+            st.session_state.ledger_group_map[g] = ledger_group
 
         st.success("Ledger Assigned")
 
@@ -229,8 +321,13 @@ if file:
 # APPLY LEDGER
 # --------------------------------------------------
 
-    df["Ledger"]=df["Transaction_Head"].map(st.session_state.ledger_map)
-    df["Ledger Group"]=df["Transaction_Head"].map(st.session_state.ledger_group_map)
+    df["Ledger"] = df["Transaction_Head"].map(
+        st.session_state.ledger_map
+    )
+
+    df["Ledger Group"] = df["Transaction_Head"].map(
+        st.session_state.ledger_group_map
+    )
 
 # --------------------------------------------------
 # TRANSACTIONS TABLE
@@ -238,54 +335,57 @@ if file:
 
     st.subheader("Transactions")
 
-    edited_df = st.data_editor(df,use_container_width=True)
+    edited_df = st.data_editor(
+        df,
+        use_container_width=True
+    )
 
 # --------------------------------------------------
 # FIND AMOUNT COLUMNS
 # --------------------------------------------------
 
-    withdraw_col=None
-    deposit_col=None
-    date_col=None
+    withdraw_col = None
+    deposit_col = None
+    date_col = None
 
     for col in edited_df.columns:
 
-        c=col.upper()
+        c = col.upper()
 
         if any(x in c for x in ["WITHDRAW","DEBIT","DR"]):
-            withdraw_col=col
+            withdraw_col = col
 
         if any(x in c for x in ["DEPOSIT","CREDIT","CR"]):
-            deposit_col=col
+            deposit_col = col
 
         if "DATE" in c:
-            date_col=col
+            date_col = col
 
 # --------------------------------------------------
 # TALLY EXPORT
 # --------------------------------------------------
 
-    tally_df=pd.DataFrame()
+    tally_df = pd.DataFrame()
 
-    tally_df["Date"]=edited_df[date_col]
-    tally_df["Ledger"]=edited_df["Ledger"]
-    tally_df["Ledger Group"]=edited_df["Ledger Group"]
-    tally_df["Narration"]=edited_df[narration_col]
+    tally_df["Date"] = edited_df[date_col]
+    tally_df["Ledger"] = edited_df["Ledger"]
+    tally_df["Ledger Group"] = edited_df["Ledger Group"]
+    tally_df["Narration"] = edited_df[narration_col]
 
-    tally_df["Debit"]=pd.to_numeric(
+    tally_df["Debit"] = pd.to_numeric(
         edited_df[withdraw_col].astype(str).str.replace(",",""),
         errors="coerce"
     ).fillna(0)
 
-    tally_df["Credit"]=pd.to_numeric(
+    tally_df["Credit"] = pd.to_numeric(
         edited_df[deposit_col].astype(str).str.replace(",",""),
         errors="coerce"
     ).fillna(0)
 
-    tally_df["Bank Ledger"]=file.name.upper()
+    tally_df["Bank Ledger"] = file.name.upper()
 
-    tally_df["Voucher Type"]=tally_df.apply(
-        lambda r: "Payment" if r["Debit"]>0 else "Receipt",
+    tally_df["Voucher Type"] = tally_df.apply(
+        lambda r: "Payment" if r["Debit"] > 0 else "Receipt",
         axis=1
     )
 
@@ -293,8 +393,10 @@ if file:
 # DOWNLOAD
 # --------------------------------------------------
 
-    buffer=BytesIO()
-    tally_df.to_csv(buffer,index=False)
+    buffer = BytesIO()
+
+    tally_df.to_csv(buffer, index=False)
+
     buffer.seek(0)
 
     st.download_button(
