@@ -28,17 +28,11 @@ def load_stopwords():
 
         return set(words)
 
-    except Exception as e:
+    except:
         st.warning("Stopwords file not found or incorrect format.")
         return set()
 
 STOP_WORDS = load_stopwords()
-
-# --------------------------------------------------
-# UNKNOWN WORD LOG
-# --------------------------------------------------
-
-unknown_words = set()
 
 # --------------------------------------------------
 # TALLY LEDGER GROUPS
@@ -90,10 +84,6 @@ def extract_head(text, freq):
         if any(char.isdigit() for char in w_clean):
             continue
 
-        # log possible stopwords
-        if len(w_clean) >= 4 and freq.get(w_clean,0) < 3:
-            unknown_words.add(w_clean)
-
         candidates.append((w_clean, freq.get(w_clean,0)))
 
     if candidates:
@@ -108,6 +98,7 @@ def extract_head(text, freq):
 def find_narration(df):
 
     for col in df.columns:
+
         c = col.upper()
 
         if "NARR" in c or "PARTICULAR" in c or "DESC" in c:
@@ -127,7 +118,6 @@ if file:
 
     if file.name.endswith(".csv"):
         df = pd.read_csv(file)
-
     else:
         df = pd.read_excel(file)
 
@@ -156,21 +146,6 @@ if file:
     df["Transaction_Head"] = df[narration_col].apply(
         lambda x: extract_head(x,freq)
     )
-
-# --------------------------------------------------
-# POSSIBLE STOPWORDS REVIEW
-# --------------------------------------------------
-
-    if unknown_words:
-
-        st.subheader("Possible Stopwords (Review)")
-
-        review_df = pd.DataFrame(
-            sorted(unknown_words),
-            columns=["Possible_Stopword"]
-        )
-
-        st.dataframe(review_df, use_container_width=True)
 
 # --------------------------------------------------
 # SESSION STATE
