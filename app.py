@@ -3,70 +3,36 @@ import pandas as pd
 import re
 from collections import Counter
 from io import BytesIO
-import sqlite3
 
 st.set_page_config(page_title="Bank Statement Intelligent Classifier", layout="wide")
 
 st.title("Bank Statement Classifier")
 
 # --------------------------------------------------
-# DATABASE SETUP
-# --------------------------------------------------
-
-def get_connection():
-    return sqlite3.connect("stopwords.db", check_same_thread=False)
-
-def initialize_db():
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stopwords (
-            word TEXT PRIMARY KEY
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-initialize_db()
-
-# --------------------------------------------------
-# LOAD STOPWORDS
+# LOAD STOPWORDS FROM EXCEL
 # --------------------------------------------------
 
 def load_stopwords():
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        df = pd.read_excel("stopwords.xlsx")
 
-    cursor.execute("SELECT word FROM stopwords")
+        words = (
+            df["word"]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .str.strip()
+            .tolist()
+        )
 
-    rows = cursor.fetchall()
+        return set(words)
 
-    conn.close()
-
-    return set([r[0].upper() for r in rows])
+    except Exception as e:
+        st.warning("Stopwords file not found or incorrect format.")
+        return set()
 
 STOP_WORDS = load_stopwords()
-
-# --------------------------------------------------
-# ADD STOPWORD
-# --------------------------------------------------
-
-def add_stopword(word):
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "INSERT OR IGNORE INTO stopwords(word) VALUES(?)",
-        (word.upper(),)
-    )
-
-    conn.commit()
-    conn.close()
 
 # --------------------------------------------------
 # UNKNOWN WORD LOG
@@ -75,7 +41,7 @@ def add_stopword(word):
 unknown_words = set()
 
 # --------------------------------------------------
-# LEDGER GROUPS
+# TALLY LEDGER GROUPS
 # --------------------------------------------------
 
 LEDGER_GROUPS = sorted([
@@ -124,6 +90,7 @@ def extract_head(text, freq):
         if any(char.isdigit() for char in w_clean):
             continue
 
+        # log possible stopwords
         if len(w_clean) >= 4 and freq.get(w_clean,0) < 3:
             unknown_words.add(w_clean)
 
@@ -141,7 +108,6 @@ def extract_head(text, freq):
 def find_narration(df):
 
     for col in df.columns:
-
         c = col.upper()
 
         if "NARR" in c or "PARTICULAR" in c or "DESC" in c:
@@ -161,6 +127,7 @@ if file:
 
     if file.name.endswith(".csv"):
         df = pd.read_csv(file)
+
     else:
         df = pd.read_excel(file)
 
@@ -191,26 +158,19 @@ if file:
     )
 
 # --------------------------------------------------
-# POSSIBLE STOPWORDS
+# POSSIBLE STOPWORDS REVIEW
 # --------------------------------------------------
 
     if unknown_words:
 
         st.subheader("Possible Stopwords (Review)")
 
-        for word in sorted(unknown_words):
+        review_df = pd.DataFrame(
+            sorted(unknown_words),
+            columns=["Possible_Stopword"]
+        )
 
-            col1, col2 = st.columns([5,1])
-
-            col1.write(word)
-
-            if col2.button("➕", key=f"add_{word}"):
-
-                add_stopword(word)
-
-                st.success(f"{word} added to stopwords")
-
-                st.rerun()
+        st.dataframe(review_df, use_container_width=True)
 
 # --------------------------------------------------
 # SESSION STATE
@@ -226,7 +186,7 @@ if file:
         st.session_state.ledger_group_map = {}
 
 # --------------------------------------------------
-# MERGE HEADS
+# MERGE TRANSACTION HEADS
 # --------------------------------------------------
 
     st.subheader("Merge Transaction Heads")
@@ -262,7 +222,7 @@ if file:
     group_counts.columns = ["Transaction_Head","Transactions"]
 
 # --------------------------------------------------
-# MAJOR / MINOR
+# MAJOR / MINOR GROUPS
 # --------------------------------------------------
 
     major = group_counts[group_counts["Transactions"] >= 5]
@@ -295,7 +255,7 @@ if file:
     st.dataframe(minor_display, use_container_width=True)
 
 # --------------------------------------------------
-# BULK LEDGER
+# BULK LEDGER ASSIGNMENT
 # --------------------------------------------------
 
     st.subheader("Bulk Ledger Assignment")
