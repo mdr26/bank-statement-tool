@@ -2,12 +2,14 @@ import streamlit as st
 import pandas as pd
 import re
 import pdfplumber
-from database import get_connection
+
+from database import (
+    get_clients, add_client, get_client_id, delete_client,
+    get_banks, add_bank, get_bank_id, delete_bank,
+    get_vendor_memory, save_vendor_memory, delete_memory
+)
 
 st.set_page_config(page_title="LedgerMind", layout="wide")
-
-conn = get_connection()
-cur = conn.cursor()
 
 # --------------------------------------------------
 # SESSION STATE
@@ -17,7 +19,7 @@ if "df" not in st.session_state:
     st.session_state.df = None
 
 # --------------------------------------------------
-# STOPWORDS SYSTEM (INSIDE APP)
+# STOPWORDS SYSTEM
 # --------------------------------------------------
 
 def load_stopwords():
@@ -55,7 +57,7 @@ LEDGER_GROUPS = sorted([
 ])
 
 # --------------------------------------------------
-# EXTRACTOR
+# EXTRACTOR (YOUR ORIGINAL LOGIC - UNCHANGED)
 # --------------------------------------------------
 
 def extract_head(text):
@@ -87,66 +89,15 @@ def extract_head(text):
 
 def apply_vendor_memory(df, client_id, bank_id):
 
-    cur.execute("""
-    SELECT vendor,ledger,ledger_group
-    FROM vendor_memory
-    WHERE client_id=? AND bank_id=?
-    """,(client_id,bank_id))
-
-    memory = {v:(l,g) for v,l,g in cur.fetchall()}
+    memory = get_vendor_memory(client_id, bank_id)
 
     df["Ledger"] = df["Transaction_Head"].map(
-        lambda x: memory.get(x,("", ""))[0]
+        lambda x: memory.get(x, ("", ""))[0]
     )
 
     df["Ledger Group"] = df["Transaction_Head"].map(
-        lambda x: memory.get(x,("", ""))[1]
+        lambda x: memory.get(x, ("", ""))[1]
     )
-
-    return df
-
-# --------------------------------------------------
-# INTERBANK DETECTION
-# --------------------------------------------------
-
-def detect_interbank_transfers(df):
-
-    if "Debit" not in df.columns or "Credit" not in df.columns:
-        return df
-
-    df["Transfer Flag"] = ""
-
-    debit_df = df[df["Debit"] > 0]
-    credit_df = df[df["Credit"] > 0]
-
-    matches = debit_df.merge(
-        credit_df,
-        left_on="Debit",
-        right_on="Credit",
-        suffixes=("_d","_c")
-    )
-
-    for _, row in matches.iterrows():
-        try:
-            date_diff = abs(
-                (pd.to_datetime(row["Date_d"]) -
-                 pd.to_datetime(row["Date_c"])).days
-            )
-
-            if date_diff <= 1:
-                amt = row["Debit"]
-
-                df.loc[df["Debit"] == amt, "Ledger"] = "Interbank Transfer"
-                df.loc[df["Credit"] == amt, "Ledger"] = "Interbank Transfer"
-
-                df.loc[df["Debit"] == amt, "Ledger Group"] = "Bank Accounts"
-                df.loc[df["Credit"] == amt, "Ledger Group"] = "Bank Accounts"
-
-                df.loc[df["Debit"] == amt, "Transfer Flag"] = "Yes"
-                df.loc[df["Credit"] == amt, "Transfer Flag"] = "Yes"
-
-        except:
-            pass
 
     return df
 
@@ -193,65 +144,58 @@ def prepare_tally_export(df, bank_name):
     ]
 
 # --------------------------------------------------
-# SIDEBAR - CLIENT & BANK MANAGEMENT
+# SIDEBAR
 # --------------------------------------------------
 
 st.sidebar.title("LedgerMind")
 
-if st.sidebar.button("🔄 Reset Session"):
-    st.session_state.df = None
-    st.rerun()
+page = st.sidebar.selectbox(
+    "Menu",
+    ["Classifier", "Memory Manager", "Stopwords Manager"]
+)
 
 # CLIENT
-cur.execute("SELECT client_name FROM clients")
-clients = [c[0] for c in cur.fetchall()]
-client_options = clients + ["➕ Add Client"]
-
-client = st.sidebar.selectbox("Client", client_options)
+clients = get_clients()
+client = st.sidebar.selectbox("Client", clients + ["➕ Add Client"])
 
 if client == "➕ Add Client":
 
     new_client = st.sidebar.text_input("New Client Name")
 
     if st.sidebar.button("Create Client"):
-        cur.execute("INSERT OR IGNORE INTO clients(client_name) VALUES(?)",(new_client,))
-        conn.commit()
+        add_client(new_client)
+        st.cache_data.clear()
         st.rerun()
 
 else:
 
-    cur.execute("SELECT id FROM clients WHERE client_name=?",(client,))
-    client_id = cur.fetchone()[0]
+    client_id = get_client_id(client)
 
-    # BANK
-    cur.execute("SELECT bank_name FROM banks WHERE client_id=?",(client_id,))
-    banks = [b[0] for b in cur.fetchall()]
-    bank_options = banks + ["➕ Add Bank"]
+    if st.sidebar.button("🗑 Delete Client"):
+        delete_client(client_id)
+        st.cache_data.clear()
+        st.rerun()
 
-    bank = st.sidebar.selectbox("Bank", bank_options)
+    banks = get_banks(client_id)
+    bank = st.sidebar.selectbox("Bank", banks + ["➕ Add Bank"])
 
     if bank == "➕ Add Bank":
 
         new_bank = st.sidebar.text_input("New Bank Name")
 
         if st.sidebar.button("Create Bank"):
-            cur.execute("INSERT INTO banks(client_id,bank_name) VALUES(?,?)",(client_id,new_bank))
-            conn.commit()
+            add_bank(client_id, new_bank)
+            st.cache_data.clear()
             st.rerun()
 
     else:
 
-        cur.execute("SELECT id FROM banks WHERE client_id=? AND bank_name=?",(client_id,bank))
-        bank_id = cur.fetchone()[0]
+        bank_id = get_bank_id(client_id, bank)
 
-# --------------------------------------------------
-# MENU
-# --------------------------------------------------
-
-page = st.sidebar.selectbox(
-    "Menu",
-    ["Classifier","Memory Manager","Dashboard","Stopwords Manager"]
-)
+        if st.sidebar.button("🗑 Delete Bank"):
+            delete_bank(bank_id)
+            st.cache_data.clear()
+            st.rerun()
 
 # --------------------------------------------------
 # CLASSIFIER
@@ -279,16 +223,13 @@ if page == "Classifier":
                 df_temp = parse_pdf_statement(file)
             else:
                 df_temp = pd.read_excel(file)
-            if df_temp is None or df_temp.empty:
-                st.error(f"{file.name} - PDF parsing failed. Please upload Excel instead.")
-                continue
 
             cols = df_temp.columns.tolist()
 
-            date_col = st.selectbox("Date Column",cols,key=file.name+"d")
-            nar_col = st.selectbox("Narration Column",cols,key=file.name+"n")
-            deb_col = st.selectbox("Debit Column",cols,key=file.name+"db")
-            cre_col = st.selectbox("Credit Column",cols,key=file.name+"cr")
+            date_col = st.selectbox("Date Column", cols, key=file.name+"d")
+            nar_col = st.selectbox("Narration Column", cols, key=file.name+"n")
+            deb_col = st.selectbox("Debit Column", cols, key=file.name+"db")
+            cre_col = st.selectbox("Credit Column", cols, key=file.name+"cr")
 
             df_temp = df_temp.rename(columns={
                 date_col:"Date",
@@ -299,8 +240,15 @@ if page == "Classifier":
 
             df_temp["Narration"] = df_temp["Narration"].astype(str).str.upper()
 
-            df_temp["Debit"] = pd.to_numeric(df_temp["Debit"].astype(str).str.replace(",",""), errors="coerce").fillna(0)
-            df_temp["Credit"] = pd.to_numeric(df_temp["Credit"].astype(str).str.replace(",",""), errors="coerce").fillna(0)
+            df_temp["Debit"] = pd.to_numeric(
+                df_temp["Debit"].astype(str).str.replace(",",""),
+                errors="coerce"
+            ).fillna(0)
+
+            df_temp["Credit"] = pd.to_numeric(
+                df_temp["Credit"].astype(str).str.replace(",",""),
+                errors="coerce"
+            ).fillna(0)
 
             dfs.append(df_temp)
 
@@ -309,8 +257,6 @@ if page == "Classifier":
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
         df = apply_vendor_memory(df, client_id, bank_id)
-
-        df = detect_interbank_transfers(df)
 
         st.session_state.df = df
 
@@ -325,7 +271,6 @@ if page == "Classifier":
             st.session_state.df["Transaction_Head"] = st.session_state.df["Narration"].apply(extract_head)
             st.rerun()
 
-        # BULK
         st.markdown("---")
         st.subheader("Bulk Ledger Assignment")
 
@@ -340,29 +285,43 @@ if page == "Classifier":
 
         if st.button("Save Ledger Mapping"):
             for v in selected:
-                cur.execute("""
-                INSERT OR REPLACE INTO vendor_memory
-                (client_id,bank_id,vendor,ledger,ledger_group)
-                VALUES(?,?,?,?,?)
-                """,(client_id,bank_id,v,ledger,group))
-            conn.commit()
+                save_vendor_memory(client_id, bank_id, v, ledger, group)
+
+            st.cache_data.clear()
+            st.success("Saved")
             st.rerun()
 
-        # REVIEW
-        pending = st.session_state.df[st.session_state.df["Ledger"] == ""]
-        if len(pending) > 0:
-            st.warning(f"{len(pending)} pending")
-            st.dataframe(pending[["Date","Narration","Transaction_Head"]])
+# --------------------------------------------------
+# MEMORY MANAGER
+# --------------------------------------------------
 
-        # EXPORT
-        st.markdown("---")
-        tally_df = prepare_tally_export(st.session_state.df, bank)
+if page == "Memory Manager":
 
-        st.download_button(
-            "Download Tally File",
-            tally_df.to_csv(index=False).encode(),
-            "tally.csv"
-        )
+    st.title("Memory Manager")
+
+    mem = get_vendor_memory(client_id, bank_id)
+
+    df_mem = pd.DataFrame([
+        {"Vendor":k,"Ledger":v[0],"Group":v[1]}
+        for k,v in mem.items()
+    ])
+
+    edited = st.data_editor(df_mem, use_container_width=True)
+
+    if st.button("Update Changes"):
+        for _, row in edited.iterrows():
+            save_vendor_memory(client_id, bank_id,
+                               row["Vendor"], row["Ledger"], row["Group"])
+        st.cache_data.clear()
+        st.success("Updated")
+
+    if not df_mem.empty:
+        delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"])
+        if st.button("Delete Vendor"):
+            delete_memory(client_id, bank_id, delete_v)
+            st.cache_data.clear()
+            st.success("Deleted")
+            st.rerun()
 
 # --------------------------------------------------
 # STOPWORDS MANAGER
@@ -373,37 +332,26 @@ if page == "Stopwords Manager":
     st.title("Stopwords Manager")
 
     words = sorted(list(st.session_state.stopwords))
-    st.dataframe(pd.DataFrame(words, columns=["Word"]))
+    st.dataframe(pd.DataFrame(words, columns=["Word"]), use_container_width=True)
 
-    if "stopword_input" not in st.session_state:
-        st.session_state.stopword_input = ""
-
-    new = st.text_input("Add Stopword", key="stopword_input").upper().strip()
+    new = st.text_input("Add Stopword").upper().strip()
 
     if st.button("Add Stopword"):
-
-        if not new:
-            st.warning("Enter a valid word")
-
-        elif new in st.session_state.stopwords:
-            st.warning(f"{new} already exists")
-
-        else:
+        if new:
             st.session_state.stopwords.add(new)
-            st.session_state.stopword_input = ""
             st.success(f"{new} added")
             st.rerun()
 
-    delete_word = st.selectbox("Delete Stopword", words)
+    if words:
+        delete_word = st.selectbox("Delete Stopword", words)
+        if st.button("Delete Stopword"):
+            st.session_state.stopwords.remove(delete_word)
+            st.success(f"{delete_word} removed")
+            st.rerun()
 
-    if st.button("Delete Stopword"):
-        st.session_state.stopwords.remove(delete_word)
-        st.success(f"{delete_word} removed")
-        st.rerun()
-
-    if st.button("💾 Save Stopwords"):
+    if st.button("💾 Save Changes"):
         try:
             pd.DataFrame(words, columns=["word"]).to_excel("stopwords.xlsx", index=False)
             st.success("Saved")
         except:
-st.error("Close Excel file before saving")
+            st.error("Close Excel file before saving")
