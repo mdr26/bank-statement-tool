@@ -3,3 +3,4 @@ __pycache__/
 *.db
 .env
 .secrets.toml
+.streamlit/secrets.toml
