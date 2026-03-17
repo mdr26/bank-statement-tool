@@ -3,3 +3,4 @@ pandas
 openpyxl
 numpy
 psycopg2-binary
+pdfplumber
