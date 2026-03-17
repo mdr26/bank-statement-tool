@@ -406,4 +406,4 @@ if page == "Stopwords Manager":
             pd.DataFrame(words, columns=["word"]).to_excel("stopwords.xlsx", index=False)
             st.success("Saved")
         except:
-            st.error("Close Excel file before saving")
+st.error("Close Excel file before saving")
