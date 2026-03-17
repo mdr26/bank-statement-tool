@@ -1,42 +1,46 @@
 import streamlit as st
 import pandas as pd
 import re
-from collections import Counter
-from io import BytesIO
+import pdfplumber
+from database import get_connection
 
-st.set_page_config(page_title="Bank Statement Intelligent Classifier", layout="wide")
+st.set_page_config(page_title="LedgerMind", layout="wide")
 
-st.title("Bank Statement Classifier")
+conn = get_connection()
+cur = conn.cursor()
 
 # --------------------------------------------------
-# LOAD STOPWORDS FROM EXCEL
+# SESSION STATE
+# --------------------------------------------------
+
+if "df" not in st.session_state:
+    st.session_state.df = None
+
+# --------------------------------------------------
+# STOPWORDS SYSTEM (INSIDE APP)
 # --------------------------------------------------
 
 def load_stopwords():
-
     try:
         df = pd.read_excel("stopwords.xlsx")
-
-        words = (
-            df["word"]
-            .dropna()
-            .astype(str)
-            .str.upper()
-            .str.strip()
-            .tolist()
-        )
-
-        return set(words)
-
+        col = df.columns[0]
+        return set(df[col].dropna().astype(str).str.upper().str.strip())
     except:
-        st.warning("Stopwords file not found or incorrect format.")
         return set()
 
-STOP_WORDS = load_stopwords()
+if "stopwords" not in st.session_state:
+    st.session_state.stopwords = load_stopwords()
+
+STOP_WORDS = st.session_state.stopwords
 
 # --------------------------------------------------
-# TALLY LEDGER GROUPS
+# CONSTANTS
 # --------------------------------------------------
+
+COMPANY_WORDS = {
+"PVT","LTD","PRIVATE","LIMITED","INDIA","SERVICES",
+"SERVICE","TECHNOLOGIES","TECH","PAYMENTS","PAYMENT"
+}
 
 LEDGER_GROUPS = sorted([
 "Bank Accounts","Bank OCC A/c","Bank OD A/c","Branch / Divisions",
@@ -51,292 +55,355 @@ LEDGER_GROUPS = sorted([
 ])
 
 # --------------------------------------------------
-# CLEAN WORD
+# EXTRACTOR
 # --------------------------------------------------
 
-def clean_word(text):
-    return re.sub(r'[^A-Z]', '', text)
-
-# --------------------------------------------------
-# EXTRACT TRANSACTION HEAD
-# --------------------------------------------------
-
-def extract_head(text, freq):
+def extract_head(text):
 
     text = str(text).upper()
-    words = re.sub(r'[^A-Z]', ' ', text).split()
+    text = re.sub(r"\d+", " ", text)
+    text = re.sub(r"[^A-Z ]", " ", text)
 
-    candidates = []
+    tokens = text.split()
+    cleaned = []
 
-    for w in words:
-
-        w_clean = clean_word(w)
-
-        if len(w_clean) < 3:
+    for token in tokens:
+        if len(token) < 3:
             continue
-
-        if w_clean in STOP_WORDS:
+        if token in STOP_WORDS:
             continue
-
-        if w_clean.startswith("OK"):
+        if token in COMPANY_WORDS:
             continue
+        cleaned.append(token)
 
-        if any(char.isdigit() for char in w_clean):
-            continue
+    if not cleaned:
+        return "SUSPENSE"
 
-        candidates.append((w_clean, freq.get(w_clean,0)))
-
-    if candidates:
-        return max(candidates, key=lambda x: x[1])[0]
-
-    return "SUSPENSE"
+    return " ".join(cleaned)
 
 # --------------------------------------------------
-# FIND NARRATION COLUMN
+# APPLY MEMORY
 # --------------------------------------------------
 
-def find_narration(df):
+def apply_vendor_memory(df, client_id, bank_id):
 
-    for col in df.columns:
+    cur.execute("""
+    SELECT vendor,ledger,ledger_group
+    FROM vendor_memory
+    WHERE client_id=? AND bank_id=?
+    """,(client_id,bank_id))
 
-        c = col.upper()
-
-        if "NARR" in c or "PARTICULAR" in c or "DESC" in c:
-            return col
-
-    text_cols = df.select_dtypes(include="object")
-
-    return text_cols.columns[0]
-
-# --------------------------------------------------
-# FILE UPLOAD
-# --------------------------------------------------
-
-file = st.file_uploader("Upload Bank Statement", type=["xlsx","xls","csv"])
-
-if file:
-
-    if file.name.endswith(".csv"):
-        df = pd.read_csv(file)
-    else:
-        df = pd.read_excel(file)
-
-    narration_col = find_narration(df)
-
-    st.success(f"Narration column detected: {narration_col}")
-
-# --------------------------------------------------
-# WORD FREQUENCY
-# --------------------------------------------------
-
-    words = []
-
-    for val in df[narration_col]:
-
-        words.extend(
-            re.sub(r'[^A-Z]', ' ', str(val).upper()).split()
-        )
-
-    freq = Counter(words)
-
-# --------------------------------------------------
-# TRANSACTION HEAD
-# --------------------------------------------------
-
-    df["Transaction_Head"] = df[narration_col].apply(
-        lambda x: extract_head(x,freq)
-    )
-
-# --------------------------------------------------
-# SESSION STATE
-# --------------------------------------------------
-
-    if "merge_map" not in st.session_state:
-        st.session_state.merge_map = {}
-
-    if "ledger_map" not in st.session_state:
-        st.session_state.ledger_map = {}
-
-    if "ledger_group_map" not in st.session_state:
-        st.session_state.ledger_group_map = {}
-
-# --------------------------------------------------
-# MERGE TRANSACTION HEADS
-# --------------------------------------------------
-
-    st.subheader("Merge Transaction Heads")
-
-    heads = sorted(df["Transaction_Head"].unique())
-
-    merge_select = st.multiselect("Select heads to merge", heads)
-
-    merge_into = st.text_input("Merge into")
-
-    if st.button("Merge Heads"):
-
-        for h in merge_select:
-
-            st.session_state.merge_map[h] = merge_into
-
-        df["Transaction_Head"] = df["Transaction_Head"].replace(
-            st.session_state.merge_map
-        )
-
-        st.success("Heads merged")
-
-# --------------------------------------------------
-# GROUP COUNTS
-# --------------------------------------------------
-
-    group_counts = (
-        df["Transaction_Head"]
-        .value_counts()
-        .reset_index()
-    )
-
-    group_counts.columns = ["Transaction_Head","Transactions"]
-
-# --------------------------------------------------
-# MAJOR / MINOR GROUPS
-# --------------------------------------------------
-
-    major = group_counts[group_counts["Transactions"] >= 5]
-    minor = group_counts[group_counts["Transactions"] < 5]
-
-# --------------------------------------------------
-# DISPLAY GROUPS
-# --------------------------------------------------
-
-    st.subheader("Major Groups")
-
-    major_display = major.copy()
-
-    major_display["Ledger"] = (
-        major_display["Transaction_Head"]
-        .map(st.session_state.ledger_map)
-    )
-
-    st.dataframe(major_display, use_container_width=True)
-
-    st.subheader("Minor Groups")
-
-    minor_display = minor.copy()
-
-    minor_display["Ledger"] = (
-        minor_display["Transaction_Head"]
-        .map(st.session_state.ledger_map)
-    )
-
-    st.dataframe(minor_display, use_container_width=True)
-
-# --------------------------------------------------
-# BULK LEDGER ASSIGNMENT
-# --------------------------------------------------
-
-    st.subheader("Bulk Ledger Assignment")
-
-    groups = group_counts["Transaction_Head"].tolist()
-
-    selected = st.multiselect("Select Groups", groups)
-
-    ledger_name = st.text_input("Ledger Name")
-
-    ledger_group = st.selectbox("Ledger Group", LEDGER_GROUPS)
-
-    if st.button("Apply Ledger"):
-
-        for g in selected:
-
-            st.session_state.ledger_map[g] = ledger_name
-            st.session_state.ledger_group_map[g] = ledger_group
-
-        st.success("Ledger Assigned")
-
-# --------------------------------------------------
-# APPLY LEDGER
-# --------------------------------------------------
+    memory = {v:(l,g) for v,l,g in cur.fetchall()}
 
     df["Ledger"] = df["Transaction_Head"].map(
-        st.session_state.ledger_map
+        lambda x: memory.get(x,("", ""))[0]
     )
 
     df["Ledger Group"] = df["Transaction_Head"].map(
-        st.session_state.ledger_group_map
+        lambda x: memory.get(x,("", ""))[1]
     )
 
+    return df
+
 # --------------------------------------------------
-# TRANSACTIONS TABLE
+# INTERBANK DETECTION
 # --------------------------------------------------
 
-    st.subheader("Transactions")
+def detect_interbank_transfers(df):
 
-    edited_df = st.data_editor(
-        df,
-        use_container_width=True
+    if "Debit" not in df.columns or "Credit" not in df.columns:
+        return df
+
+    df["Transfer Flag"] = ""
+
+    debit_df = df[df["Debit"] > 0]
+    credit_df = df[df["Credit"] > 0]
+
+    matches = debit_df.merge(
+        credit_df,
+        left_on="Debit",
+        right_on="Credit",
+        suffixes=("_d","_c")
     )
 
+    for _, row in matches.iterrows():
+        try:
+            date_diff = abs(
+                (pd.to_datetime(row["Date_d"]) -
+                 pd.to_datetime(row["Date_c"])).days
+            )
+
+            if date_diff <= 1:
+                amt = row["Debit"]
+
+                df.loc[df["Debit"] == amt, "Ledger"] = "Interbank Transfer"
+                df.loc[df["Credit"] == amt, "Ledger"] = "Interbank Transfer"
+
+                df.loc[df["Debit"] == amt, "Ledger Group"] = "Bank Accounts"
+                df.loc[df["Credit"] == amt, "Ledger Group"] = "Bank Accounts"
+
+                df.loc[df["Debit"] == amt, "Transfer Flag"] = "Yes"
+                df.loc[df["Credit"] == amt, "Transfer Flag"] = "Yes"
+
+        except:
+            pass
+
+    return df
+
 # --------------------------------------------------
-# FIND AMOUNT COLUMNS
+# PDF PARSER
 # --------------------------------------------------
 
-    withdraw_col = None
-    deposit_col = None
-    date_col = None
+def parse_pdf_statement(file):
 
-    for col in edited_df.columns:
+    tables = []
 
-        c = col.upper()
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            table = page.extract_table()
+            if table:
+                df = pd.DataFrame(table[1:], columns=table[0])
+                tables.append(df)
 
-        if any(x in c for x in ["WITHDRAW","DEBIT","DR"]):
-            withdraw_col = col
+    if tables:
+        return pd.concat(tables, ignore_index=True)
 
-        if any(x in c for x in ["DEPOSIT","CREDIT","CR"]):
-            deposit_col = col
-
-        if "DATE" in c:
-            date_col = col
+    return None
 
 # --------------------------------------------------
 # TALLY EXPORT
 # --------------------------------------------------
 
-    tally_df = pd.DataFrame()
+def prepare_tally_export(df, bank_name):
 
-    tally_df["Date"] = edited_df[date_col]
-    tally_df["Ledger"] = edited_df["Ledger"]
-    tally_df["Ledger Group"] = edited_df["Ledger Group"]
-    tally_df["Narration"] = edited_df[narration_col]
+    export_df = df.copy()
 
-    tally_df["Debit"] = pd.to_numeric(
-        edited_df[withdraw_col].astype(str).str.replace(",",""),
-        errors="coerce"
-    ).fillna(0)
+    def get_type(row):
+        if row["Credit"] > 0:
+            return "Receipt"
+        elif row["Debit"] > 0:
+            return "Payment"
+        return ""
 
-    tally_df["Credit"] = pd.to_numeric(
-        edited_df[deposit_col].astype(str).str.replace(",",""),
-        errors="coerce"
-    ).fillna(0)
+    export_df["Voucher Type"] = export_df.apply(get_type, axis=1)
+    export_df["Bank Ledger"] = bank_name
 
-    tally_df["Bank Ledger"] = file.name.upper()
-
-    tally_df["Voucher Type"] = tally_df.apply(
-        lambda r: "Payment" if r["Debit"] > 0 else "Receipt",
-        axis=1
-    )
+    return export_df[
+        ["Date","Ledger","Ledger Group","Narration","Debit","Credit","Bank Ledger","Voucher Type"]
+    ]
 
 # --------------------------------------------------
-# DOWNLOAD
+# SIDEBAR - CLIENT & BANK MANAGEMENT
 # --------------------------------------------------
 
-    buffer = BytesIO()
+st.sidebar.title("LedgerMind")
 
-    tally_df.to_csv(buffer, index=False)
+if st.sidebar.button("🔄 Reset Session"):
+    st.session_state.df = None
+    st.rerun()
 
-    buffer.seek(0)
+# CLIENT
+cur.execute("SELECT client_name FROM clients")
+clients = [c[0] for c in cur.fetchall()]
+client_options = clients + ["➕ Add Client"]
 
-    st.download_button(
-        "Download Tally Import File",
-        buffer,
-        "tally_import.csv",
-        "text/csv"
+client = st.sidebar.selectbox("Client", client_options)
+
+if client == "➕ Add Client":
+
+    new_client = st.sidebar.text_input("New Client Name")
+
+    if st.sidebar.button("Create Client"):
+        cur.execute("INSERT OR IGNORE INTO clients(client_name) VALUES(?)",(new_client,))
+        conn.commit()
+        st.rerun()
+
+else:
+
+    cur.execute("SELECT id FROM clients WHERE client_name=?",(client,))
+    client_id = cur.fetchone()[0]
+
+    # BANK
+    cur.execute("SELECT bank_name FROM banks WHERE client_id=?",(client_id,))
+    banks = [b[0] for b in cur.fetchall()]
+    bank_options = banks + ["➕ Add Bank"]
+
+    bank = st.sidebar.selectbox("Bank", bank_options)
+
+    if bank == "➕ Add Bank":
+
+        new_bank = st.sidebar.text_input("New Bank Name")
+
+        if st.sidebar.button("Create Bank"):
+            cur.execute("INSERT INTO banks(client_id,bank_name) VALUES(?,?)",(client_id,new_bank))
+            conn.commit()
+            st.rerun()
+
+    else:
+
+        cur.execute("SELECT id FROM banks WHERE client_id=? AND bank_name=?",(client_id,bank))
+        bank_id = cur.fetchone()[0]
+
+# --------------------------------------------------
+# MENU
+# --------------------------------------------------
+
+page = st.sidebar.selectbox(
+    "Menu",
+    ["Classifier","Memory Manager","Dashboard","Stopwords Manager"]
+)
+
+# --------------------------------------------------
+# CLASSIFIER
+# --------------------------------------------------
+
+if page == "Classifier":
+
+    st.title("LedgerMind")
+
+    files = st.file_uploader(
+        "Upload Statements",
+        type=["xlsx","xls","csv","pdf"],
+        accept_multiple_files=True
     )
+
+    if files:
+
+        dfs = []
+
+        for file in files:
+
+            if file.name.endswith(".csv"):
+                df_temp = pd.read_csv(file)
+            elif file.name.endswith(".pdf"):
+                df_temp = parse_pdf_statement(file)
+            else:
+                df_temp = pd.read_excel(file)
+            if df_temp is None or df_temp.empty:
+                st.error(f"{file.name} - PDF parsing failed. Please upload Excel instead.")
+                continue
+
+            cols = df_temp.columns.tolist()
+
+            date_col = st.selectbox("Date Column",cols,key=file.name+"d")
+            nar_col = st.selectbox("Narration Column",cols,key=file.name+"n")
+            deb_col = st.selectbox("Debit Column",cols,key=file.name+"db")
+            cre_col = st.selectbox("Credit Column",cols,key=file.name+"cr")
+
+            df_temp = df_temp.rename(columns={
+                date_col:"Date",
+                nar_col:"Narration",
+                deb_col:"Debit",
+                cre_col:"Credit"
+            })
+
+            df_temp["Narration"] = df_temp["Narration"].astype(str).str.upper()
+
+            df_temp["Debit"] = pd.to_numeric(df_temp["Debit"].astype(str).str.replace(",",""), errors="coerce").fillna(0)
+            df_temp["Credit"] = pd.to_numeric(df_temp["Credit"].astype(str).str.replace(",",""), errors="coerce").fillna(0)
+
+            dfs.append(df_temp)
+
+        df = pd.concat(dfs, ignore_index=True)
+
+        df["Transaction_Head"] = df["Narration"].apply(extract_head)
+
+        df = apply_vendor_memory(df, client_id, bank_id)
+
+        df = detect_interbank_transfers(df)
+
+        st.session_state.df = df
+
+    if st.session_state.df is not None:
+
+        st.subheader("Transactions")
+
+        edited_df = st.data_editor(st.session_state.df, use_container_width=True)
+        st.session_state.df = edited_df
+
+        if st.button("Re-Extract Transaction Heads"):
+            st.session_state.df["Transaction_Head"] = st.session_state.df["Narration"].apply(extract_head)
+            st.rerun()
+
+        # BULK
+        st.markdown("---")
+        st.subheader("Bulk Ledger Assignment")
+
+        unmapped = st.session_state.df[
+            st.session_state.df["Ledger"] == ""
+        ]["Transaction_Head"].unique()
+
+        selected = st.multiselect("Select Vendors", sorted(unmapped))
+
+        ledger = st.text_input("Ledger Name")
+        group = st.selectbox("Ledger Group", LEDGER_GROUPS)
+
+        if st.button("Save Ledger Mapping"):
+            for v in selected:
+                cur.execute("""
+                INSERT OR REPLACE INTO vendor_memory
+                (client_id,bank_id,vendor,ledger,ledger_group)
+                VALUES(?,?,?,?,?)
+                """,(client_id,bank_id,v,ledger,group))
+            conn.commit()
+            st.rerun()
+
+        # REVIEW
+        pending = st.session_state.df[st.session_state.df["Ledger"] == ""]
+        if len(pending) > 0:
+            st.warning(f"{len(pending)} pending")
+            st.dataframe(pending[["Date","Narration","Transaction_Head"]])
+
+        # EXPORT
+        st.markdown("---")
+        tally_df = prepare_tally_export(st.session_state.df, bank)
+
+        st.download_button(
+            "Download Tally File",
+            tally_df.to_csv(index=False).encode(),
+            "tally.csv"
+        )
+
+# --------------------------------------------------
+# STOPWORDS MANAGER
+# --------------------------------------------------
+
+if page == "Stopwords Manager":
+
+    st.title("Stopwords Manager")
+
+    words = sorted(list(st.session_state.stopwords))
+    st.dataframe(pd.DataFrame(words, columns=["Word"]))
+
+    if "stopword_input" not in st.session_state:
+        st.session_state.stopword_input = ""
+
+    new = st.text_input("Add Stopword", key="stopword_input").upper().strip()
+
+    if st.button("Add Stopword"):
+
+        if not new:
+            st.warning("Enter a valid word")
+
+        elif new in st.session_state.stopwords:
+            st.warning(f"{new} already exists")
+
+        else:
+            st.session_state.stopwords.add(new)
+            st.session_state.stopword_input = ""
+            st.success(f"{new} added")
+            st.rerun()
+
+    delete_word = st.selectbox("Delete Stopword", words)
+
+    if st.button("Delete Stopword"):
+        st.session_state.stopwords.remove(delete_word)
+        st.success(f"{delete_word} removed")
+        st.rerun()
+
+    if st.button("💾 Save Stopwords"):
+        try:
+            pd.DataFrame(words, columns=["word"]).to_excel("stopwords.xlsx", index=False)
+            st.success("Saved")
+        except:
+            st.error("Close Excel file before saving")
