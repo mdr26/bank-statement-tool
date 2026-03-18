@@ -1,9 +1,14 @@
+import os
 import psycopg2
 import streamlit as st
 
 def get_connection():
-    return psycopg2.connect(st.secrets["DB_URL"])
+    try:
+        db_url = os.getenv("DB_URL") or st.secrets["DB_URL"]
+    except:
+        db_url = os.getenv("DB_URL")
 
+    return psycopg2.connect(db_url)
 
 # ---------------- CLIENTS ----------------
 @st.cache_data

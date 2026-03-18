@@ -2,6 +2,18 @@ import streamlit as st
 import pandas as pd
 import re
 import pdfplumber
+from dotenv import load_dotenv
+load_dotenv()
+from database import get_vendor_memory
+import os
+
+def get_connection():
+    db_url = st.secrets.get("DB_URL", None)
+
+    if not db_url:
+        db_url = os.getenv("DB_URL")  # fallback for local
+
+    return psycopg2.connect(db_url)
 
 from database import (
     get_clients, add_client, get_client_id, delete_client,
@@ -57,7 +69,7 @@ LEDGER_GROUPS = sorted([
 ])
 
 # --------------------------------------------------
-# EXTRACTOR (YOUR ORIGINAL LOGIC - UNCHANGED)
+# EXTRACTOR
 # --------------------------------------------------
 
 def extract_head(text):
@@ -256,7 +268,9 @@ if page == "Classifier":
 
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
-        df = apply_vendor_memory(df, client_id, bank_id)
+        # ✅ FIX APPLIED HERE
+        if "client_id" in locals() and "bank_id" in locals():
+            df = apply_vendor_memory(df, client_id, bank_id)
 
         st.session_state.df = df
 
@@ -290,68 +304,3 @@ if page == "Classifier":
             st.cache_data.clear()
             st.success("Saved")
             st.rerun()
-
-# --------------------------------------------------
-# MEMORY MANAGER
-# --------------------------------------------------
-
-if page == "Memory Manager":
-
-    st.title("Memory Manager")
-
-    mem = get_vendor_memory(client_id, bank_id)
-
-    df_mem = pd.DataFrame([
-        {"Vendor":k,"Ledger":v[0],"Group":v[1]}
-        for k,v in mem.items()
-    ])
-
-    edited = st.data_editor(df_mem, use_container_width=True)
-
-    if st.button("Update Changes"):
-        for _, row in edited.iterrows():
-            save_vendor_memory(client_id, bank_id,
-                               row["Vendor"], row["Ledger"], row["Group"])
-        st.cache_data.clear()
-        st.success("Updated")
-
-    if not df_mem.empty:
-        delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"])
-        if st.button("Delete Vendor"):
-            delete_memory(client_id, bank_id, delete_v)
-            st.cache_data.clear()
-            st.success("Deleted")
-            st.rerun()
-
-# --------------------------------------------------
-# STOPWORDS MANAGER
-# --------------------------------------------------
-
-if page == "Stopwords Manager":
-
-    st.title("Stopwords Manager")
-
-    words = sorted(list(st.session_state.stopwords))
-    st.dataframe(pd.DataFrame(words, columns=["Word"]), use_container_width=True)
-
-    new = st.text_input("Add Stopword").upper().strip()
-
-    if st.button("Add Stopword"):
-        if new:
-            st.session_state.stopwords.add(new)
-            st.success(f"{new} added")
-            st.rerun()
-
-    if words:
-        delete_word = st.selectbox("Delete Stopword", words)
-        if st.button("Delete Stopword"):
-            st.session_state.stopwords.remove(delete_word)
-            st.success(f"{delete_word} removed")
-            st.rerun()
-
-    if st.button("💾 Save Changes"):
-        try:
-            pd.DataFrame(words, columns=["word"]).to_excel("stopwords.xlsx", index=False)
-            st.success("Saved")
-        except:
-            st.error("Close Excel file before saving")
