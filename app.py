@@ -121,59 +121,66 @@ page = st.sidebar.selectbox("Menu",
     ["Classifier", "Memory Manager", "Stopwords Manager"]
 )
 
-# CLIENT
-clients = get_clients()
-client = st.sidebar.selectbox(
-    "Client",
-    clients + ["➕ Add Client"],
-    key="client_select"
-)
+# ---------- CLIENT ----------
 
+clients = get_clients()
+
+if "new_client_added" in st.session_state:
+    clients = get_clients()  # refresh
+
+client_options = clients + ["➕ Add Client"]
+
+client = st.sidebar.selectbox("Client", client_options)
+
+# ADD CLIENT
 if client == "➕ Add Client":
 
-    new_client = st.sidebar.text_input("New Client Name", key="new_client")
+    new_client = st.sidebar.text_input("New Client Name")
 
-    if st.sidebar.button("Create Client", key="create_client_btn"):
+    if st.sidebar.button("Create Client"):
         if new_client.strip():
-            clean_name = new_client.strip().upper()
+            clean = new_client.strip().upper()
 
-            if clean_name not in [c.upper() for c in clients]:
-                add_client(clean_name)
+            if clean not in [c.upper() for c in clients]:
+                add_client(clean)
 
-            st.session_state.client_select = clean_name
+            st.session_state["new_client_added"] = clean
             st.success("Client added")
             st.rerun()
 
+# EXISTING CLIENT
 else:
 
     client_id = get_client_id(client)
 
-    if st.sidebar.button("🗑 Delete Client", key="delete_client_btn"):
+    if st.sidebar.button("🗑 Delete Client"):
         delete_client(client_id)
         st.success("Client deleted")
         st.rerun()
 
-    # BANK
+    # ---------- BANK ----------
+
     banks = get_banks(client_id)
 
-    bank = st.sidebar.selectbox(
-        "Bank",
-        banks + ["➕ Add Bank"],
-        key="bank_select"
-    )
+    if "new_bank_added" in st.session_state:
+        banks = get_banks(client_id)
+
+    bank_options = banks + ["➕ Add Bank"]
+
+    bank = st.sidebar.selectbox("Bank", bank_options)
 
     if bank == "➕ Add Bank":
 
-        new_bank = st.sidebar.text_input("New Bank Name", key="new_bank")
+        new_bank = st.sidebar.text_input("New Bank Name")
 
-        if st.sidebar.button("Create Bank", key="create_bank_btn"):
+        if st.sidebar.button("Create Bank"):
             if new_bank.strip():
-                clean_bank = new_bank.strip().upper()
+                clean = new_bank.strip().upper()
 
-                if clean_bank not in [b.upper() for b in banks]:
-                    add_bank(client_id, clean_bank)
+                if clean not in [b.upper() for b in banks]:
+                    add_bank(client_id, clean)
 
-                st.session_state.bank_select = clean_bank
+                st.session_state["new_bank_added"] = clean
                 st.success("Bank added")
                 st.rerun()
 
@@ -181,7 +188,7 @@ else:
 
         bank_id = get_bank_id(client_id, bank)
 
-        if st.sidebar.button("🗑 Delete Bank", key="delete_bank_btn"):
+        if st.sidebar.button("🗑 Delete Bank"):
             delete_bank(bank_id)
             st.success("Bank deleted")
             st.rerun()
