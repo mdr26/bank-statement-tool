@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 import pdfplumber
-from database import get_vendor_memory
 
 from database import (
     get_clients, add_client, get_client_id, delete_client,
@@ -12,6 +11,9 @@ from database import (
 
 st.set_page_config(page_title="LedgerMind", layout="wide")
 
+# VERSION CHECK (REMOVE LATER)
+st.write("VERSION 3")
+
 # --------------------------------------------------
 # SESSION STATE
 # --------------------------------------------------
@@ -20,15 +22,25 @@ if "df" not in st.session_state:
     st.session_state.df = None
 
 # --------------------------------------------------
-# STOPWORDS SYSTEM
+# STOPWORDS SYSTEM (FIXED)
 # --------------------------------------------------
 
 def load_stopwords():
     try:
-        df = pd.read_excel("stopwords.xlsx")
-        col = df.columns[0]
-        return set(df[col].dropna().astype(str).str.upper().str.strip())
-    except:
+        df = pd.read_excel("stopwords.xlsx", header=None)
+
+        words = set(
+            df.iloc[:, 0]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .str.strip()
+        )
+
+        return words
+
+    except Exception as e:
+        st.error(f"Stopwords error: {e}")
         return set()
 
 if "stopwords" not in st.session_state:
@@ -155,7 +167,6 @@ page = st.sidebar.selectbox(
     ["Classifier", "Memory Manager", "Stopwords Manager"]
 )
 
-# CLIENT
 clients = get_clients()
 client = st.sidebar.selectbox("Client", clients + ["➕ Add Client"])
 
@@ -257,7 +268,6 @@ if page == "Classifier":
 
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
-        # ✅ FIX APPLIED HERE
         if "client_id" in locals() and "bank_id" in locals():
             df = apply_vendor_memory(df, client_id, bank_id)
 
@@ -270,26 +280,57 @@ if page == "Classifier":
         edited_df = st.data_editor(st.session_state.df, use_container_width=True)
         st.session_state.df = edited_df
 
-        if st.button("Re-Extract Transaction Heads"):
-            st.session_state.df["Transaction_Head"] = st.session_state.df["Narration"].apply(extract_head)
-            st.rerun()
-
         st.markdown("---")
-        st.subheader("Bulk Ledger Assignment")
 
-        unmapped = st.session_state.df[
-            st.session_state.df["Ledger"] == ""
-        ]["Transaction_Head"].unique()
+        # DOWNLOAD
+        st.subheader("Download for Tally")
 
-        selected = st.multiselect("Select Vendors", sorted(unmapped))
+        export_df = prepare_tally_export(st.session_state.df, bank)
 
-        ledger = st.text_input("Ledger Name")
-        group = st.selectbox("Ledger Group", LEDGER_GROUPS)
+        csv = export_df.to_csv(index=False).encode("utf-8")
 
-        if st.button("Save Ledger Mapping"):
-            for v in selected:
-                save_vendor_memory(client_id, bank_id, v, ledger, group)
+        st.download_button(
+            label="📥 Download CSV",
+            data=csv,
+            file_name="tally_export.csv",
+            mime="text/csv"
+        )
 
-            st.cache_data.clear()
-            st.success("Saved")
-            st.rerun()
+# --------------------------------------------------
+# MEMORY MANAGER (FIXED)
+# --------------------------------------------------
+
+if page == "Memory Manager":
+
+    st.title("Memory Manager")
+
+    if "client_id" not in locals() or "bank_id" not in locals():
+        st.warning("Select client and bank first")
+    else:
+
+        mem = get_vendor_memory(client_id, bank_id)
+
+        if not mem:
+            st.warning("No memory found")
+        else:
+            df_mem = pd.DataFrame([
+                {"Vendor": k, "Ledger": v[0], "Group": v[1]}
+                for k, v in mem.items()
+            ])
+
+            st.dataframe(df_mem)
+
+# --------------------------------------------------
+# STOPWORDS MANAGER
+# --------------------------------------------------
+
+if page == "Stopwords Manager":
+
+    st.title("Stopwords Manager")
+
+    words = sorted(list(st.session_state.stopwords))
+
+    if not words:
+        st.warning("No stopwords found")
+    else:
+        st.dataframe(pd.DataFrame(words, columns=["Word"]))
