@@ -192,7 +192,8 @@ if page == "Classifier":
         df = pd.concat(dfs, ignore_index=True)
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
-        df = apply_vendor_memory(df, client_id, bank_id)
+        if "client_id" in locals() and "bank_id" in locals():
+            df = apply_vendor_memory(df, client_id, bank_id)
 
         st.session_state.df = df
 
