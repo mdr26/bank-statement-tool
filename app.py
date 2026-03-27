@@ -142,6 +142,11 @@ else:
 
     banks = get_banks(client_id)
     bank = st.sidebar.selectbox("Bank", banks + ["➕ Add Bank"])
+    
+    if st.sidebar.button("🗑 Delete Client"):
+    delete_client(client_id)
+    st.success("Client deleted")
+    st.rerun()
 
     if bank == "➕ Add Bank":
         new_bank = st.sidebar.text_input("New Bank Name")
@@ -150,6 +155,19 @@ else:
             st.rerun()
     else:
         bank_id = get_bank_id(client_id, bank)
+
+        if st.sidebar.button("🗑 Delete Bank"):
+    delete_bank(bank_id)
+    st.success("Bank deleted")
+    st.rerun()
+
+    if st.sidebar.button("🗑 Delete Client"):
+    if st.sidebar.checkbox("Confirm delete client"):
+        delete_client(client_id)
+        st.success("Deleted")
+        st.rerun()
+
+        
 
 # --------------------------------------------------
 # CLASSIFIER
