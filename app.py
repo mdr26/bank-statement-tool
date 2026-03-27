@@ -293,13 +293,61 @@ if page == "Classifier":
 # STOPWORDS MANAGER (FIXED)
 # --------------------------------------------------
 
+i# --------------------------------------------------
+# STOPWORDS MANAGER (FULL CRUD)
+# --------------------------------------------------
+
 if page == "Stopwords Manager":
 
     st.title("Stopwords Manager")
 
     words = sorted(list(st.session_state.stopwords))
 
+    # DISPLAY
     if not words:
-        st.warning("⚠️ No stopwords found. Check stopwords.xlsx")
+        st.warning("⚠️ No stopwords found.")
     else:
         st.dataframe(pd.DataFrame(words, columns=["Word"]), use_container_width=True)
+
+    st.markdown("---")
+
+    # ➕ ADD STOPWORD
+    st.subheader("Add Stopword")
+
+    new_word = st.text_input("Enter new stopword").upper().strip()
+
+    if st.button("Add Stopword"):
+        if not new_word:
+            st.warning("Enter a valid word")
+        elif new_word in st.session_state.stopwords:
+            st.warning(f"{new_word} already exists")
+        else:
+            st.session_state.stopwords.add(new_word)
+            st.success(f"{new_word} added")
+            st.rerun()
+
+    st.markdown("---")
+
+    # ❌ DELETE STOPWORD
+    st.subheader("Delete Stopword")
+
+    if words:
+        delete_word = st.selectbox("Select word to delete", words)
+
+        if st.button("Delete Stopword"):
+            st.session_state.stopwords.remove(delete_word)
+            st.success(f"{delete_word} removed")
+            st.rerun()
+
+    st.markdown("---")
+
+    # 💾 SAVE TO EXCEL
+    st.subheader("Save Changes")
+
+    if st.button("💾 Save Stopwords to File"):
+        try:
+            df = pd.DataFrame(sorted(st.session_state.stopwords), columns=["Word"])
+            df.to_excel("stopwords.xlsx", index=False)
+            st.success("Stopwords saved successfully!")
+        except Exception as e:
+            st.error(f"Error saving file: {e}")
