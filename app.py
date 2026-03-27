@@ -124,18 +124,37 @@ page = st.sidebar.selectbox("Menu",
 # ---------- CLIENT ----------
 
 clients = get_clients()
+client_options = clients + ["➕ Add Client"]
 
-if "new_client_added" in st.session_state:
-    clients = get_clients()  # refresh
+client = st.sidebar.selectbox("Client", client_options)
 
-client_options = ["➕ Add Client"] + clients
+# ADD CLIENT
+if client == "➕ Add Client":
 
-client = st.sidebar.selectbox(
-    "Client",
-    client_options,
-    index=1 if len(clients) > 0 else 0
-)
+    new_client = st.sidebar.text_input("New Client Name")
 
+    if st.sidebar.button("Create Client"):
+        if new_client.strip():
+            clean = new_client.strip().upper()
+
+            if clean not in [c.upper() for c in get_clients()]:
+                add_client(clean)
+
+            st.success("Client added")
+            st.rerun()
+
+# EXISTING CLIENT
+else:
+
+    client_id = get_client_id(client)
+
+    if st.sidebar.button("🗑 Delete Client"):
+        delete_client(client_id)
+        st.success("Client deleted")
+        st.rerun()
+
+    # 🔥 IMPORTANT: RELOAD BANKS AFTER CLIENT FIX
+    banks = get_banks(client_id)
 # ADD CLIENT
 if client == "➕ Add Client":
 
@@ -181,7 +200,7 @@ else:
             if new_bank.strip():
                 clean = new_bank.strip().upper()
 
-                if clean not in [b.upper() for b in banks]:
+                if clean not in [b.upper() for b in get_banks(client_id)]:
                     add_bank(client_id, clean)
 
                 st.session_state["new_bank_added"] = clean
