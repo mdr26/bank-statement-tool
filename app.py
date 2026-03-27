@@ -3,17 +3,10 @@ import pandas as pd
 import re
 import pdfplumber
 from dotenv import load_dotenv
-load_dotenv()
-from database import get_vendor_memory
 import os
+import psycopg2
 
-def get_connection():
-    db_url = st.secrets.get("DB_URL", None)
-
-    if not db_url:
-        db_url = os.getenv("DB_URL")  # fallback for local
-
-    return psycopg2.connect(db_url)
+load_dotenv()
 
 from database import (
     get_clients, add_client, get_client_id, delete_client,
@@ -31,15 +24,31 @@ if "df" not in st.session_state:
     st.session_state.df = None
 
 # --------------------------------------------------
-# STOPWORDS SYSTEM
+# STOPWORDS SYSTEM (FIXED)
 # --------------------------------------------------
 
 def load_stopwords():
     try:
-        df = pd.read_excel("stopwords.xlsx")
-        col = df.columns[0]
-        return set(df[col].dropna().astype(str).str.upper().str.strip())
-    except:
+        file_path = os.path.join(os.getcwd(), "stopwords.xlsx")
+
+        if not os.path.exists(file_path):
+            st.error("❌ stopwords.xlsx not found in project")
+            return set()
+
+        df = pd.read_excel(file_path, header=None)
+
+        words = set(
+            df.iloc[:, 0]
+            .dropna()
+            .astype(str)
+            .str.upper()
+            .str.strip()
+        )
+
+        return words
+
+    except Exception as e:
+        st.error(f"Error loading stopwords: {e}")
         return set()
 
 if "stopwords" not in st.session_state:
@@ -134,28 +143,6 @@ def parse_pdf_statement(file):
     return None
 
 # --------------------------------------------------
-# TALLY EXPORT
-# --------------------------------------------------
-
-def prepare_tally_export(df, bank_name):
-
-    export_df = df.copy()
-
-    def get_type(row):
-        if row["Credit"] > 0:
-            return "Receipt"
-        elif row["Debit"] > 0:
-            return "Payment"
-        return ""
-
-    export_df["Voucher Type"] = export_df.apply(get_type, axis=1)
-    export_df["Bank Ledger"] = bank_name
-
-    return export_df[
-        ["Date","Ledger","Ledger Group","Narration","Debit","Credit","Bank Ledger","Voucher Type"]
-    ]
-
-# --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 
@@ -166,7 +153,6 @@ page = st.sidebar.selectbox(
     ["Classifier", "Memory Manager", "Stopwords Manager"]
 )
 
-# CLIENT
 clients = get_clients()
 client = st.sidebar.selectbox("Client", clients + ["➕ Add Client"])
 
@@ -265,10 +251,8 @@ if page == "Classifier":
             dfs.append(df_temp)
 
         df = pd.concat(dfs, ignore_index=True)
-
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
-        # ✅ FIX APPLIED HERE
         if "client_id" in locals() and "bank_id" in locals():
             df = apply_vendor_memory(df, client_id, bank_id)
 
@@ -304,3 +288,18 @@ if page == "Classifier":
             st.cache_data.clear()
             st.success("Saved")
             st.rerun()
+
+# --------------------------------------------------
+# STOPWORDS MANAGER (FIXED)
+# --------------------------------------------------
+
+if page == "Stopwords Manager":
+
+    st.title("Stopwords Manager")
+
+    words = sorted(list(st.session_state.stopwords))
+
+    if not words:
+        st.warning("⚠️ No stopwords found. Check stopwords.xlsx")
+    else:
+        st.dataframe(pd.DataFrame(words, columns=["Word"]), use_container_width=True)
