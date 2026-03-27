@@ -210,12 +210,40 @@ if page == "Classifier":
             key="download_btn"
         )
 
+st.markdown("---")
+st.subheader("Bulk Ledger Assignment")
+
+# ⚠️ Safety check
+if "client_id" not in locals() or "bank_id" not in locals():
+    st.warning("Select client and bank first")
+else:
+
+    unmapped = st.session_state.df[
+        st.session_state.df["Ledger"] == ""
+    ]["Transaction_Head"].unique()
+
+    selected = st.multiselect("Select Vendors", sorted(unmapped), key="bulk_select")
+
+    ledger = st.text_input("Ledger Name", key="bulk_ledger")
+    group = st.selectbox("Ledger Group", LEDGER_GROUPS, key="bulk_group")
+
+    if st.button("Save Ledger Mapping", key="save_bulk_mapping"):
+        for v in selected:
+            save_vendor_memory(client_id, bank_id, v, ledger, group)
+
+        st.success("Saved")
+        st.rerun()        
+
 # ---------------- MEMORY ----------------
 if page == "Memory Manager":
 
     st.title("Memory Manager")
 
+    if "client_id" in locals() and "bank_id" in locals():
     mem = get_vendor_memory(client_id, bank_id)
+else:
+    st.warning("Select client and bank first")
+    st.stop()
 
     if mem:
 
