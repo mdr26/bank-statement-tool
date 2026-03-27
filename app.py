@@ -201,38 +201,40 @@ if page == "Classifier":
 
         st.data_editor(st.session_state.df, use_container_width=True)
 
-        export_df = prepare_tally_export(st.session_state.df, bank)
+        # -------- BULK ASSIGN --------
+        st.markdown("---")
+        st.subheader("Bulk Ledger Assignment")
 
-        st.download_button(
-            "Download CSV",
-            export_df.to_csv(index=False),
-            "tally.csv",
-            key="download_btn"
-        )
+        if "client_id" in locals() and "bank_id" in locals():
 
-st.markdown("---")
-st.subheader("Bulk Ledger Assignment")
+            unmapped = st.session_state.df[
+                st.session_state.df["Ledger"] == ""
+            ]["Transaction_Head"].unique()
 
-# ⚠️ Safety check
-if "client_id" not in locals() or "bank_id" not in locals():
-    st.warning("Select client and bank first")
-else:
+            selected = st.multiselect("Select Vendors", sorted(unmapped))
+            ledger = st.text_input("Ledger Name")
+            group = st.selectbox("Ledger Group", LEDGER_GROUPS)
 
-    unmapped = st.session_state.df[
-        st.session_state.df["Ledger"] == ""
-    ]["Transaction_Head"].unique()
+            if st.button("Save Ledger Mapping", key="bulk_save"):
+                for v in selected:
+                    save_vendor_memory(client_id, bank_id, v, ledger, group)
+                st.success("Saved")
+                st.rerun()
+        else:
+            st.warning("Select client and bank first")
 
-    selected = st.multiselect("Select Vendors", sorted(unmapped), key="bulk_select")
+        # -------- DOWNLOAD --------
+        st.markdown("---")
 
-    ledger = st.text_input("Ledger Name", key="bulk_ledger")
-    group = st.selectbox("Ledger Group", LEDGER_GROUPS, key="bulk_group")
+        if "bank" in locals():
+            export_df = prepare_tally_export(st.session_state.df, bank)
 
-    if st.button("Save Ledger Mapping", key="save_bulk_mapping"):
-        for v in selected:
-            save_vendor_memory(client_id, bank_id, v, ledger, group)
-
-        st.success("Saved")
-        st.rerun()        
+            st.download_button(
+                "Download CSV",
+                export_df.to_csv(index=False),
+                "tally.csv",
+                key="download"
+            )
 
 # ---------------- MEMORY ----------------
 if page == "Memory Manager":
@@ -240,30 +242,33 @@ if page == "Memory Manager":
     st.title("Memory Manager")
 
     if "client_id" in locals() and "bank_id" in locals():
-    mem = get_vendor_memory(client_id, bank_id)
-else:
-    st.warning("Select client and bank first")
-    st.stop()
 
-    if mem:
+        mem = get_vendor_memory(client_id, bank_id)
 
-        df_mem = pd.DataFrame([
-            {"Vendor": k, "Ledger": v[0], "Group": v[1]}
-            for k, v in mem.items()
-        ])
+        if mem:
 
-        edited = st.data_editor(df_mem)
+            df_mem = pd.DataFrame([
+                {"Vendor": k, "Ledger": v[0], "Group": v[1]}
+                for k, v in mem.items()
+            ])
 
-        if st.button("Update Changes", key="update_memory"):
-            for _, row in edited.iterrows():
-                save_vendor_memory(client_id, bank_id, row["Vendor"], row["Ledger"], row["Group"])
-            st.success("Updated")
+            edited = st.data_editor(df_mem)
 
-        delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"], key="delete_vendor_select")
+            if st.button("Update Changes", key="update_memory"):
+                for _, row in edited.iterrows():
+                    save_vendor_memory(client_id, bank_id, row["Vendor"], row["Ledger"], row["Group"])
+                st.success("Updated")
 
-        if st.button("Delete Vendor", key="delete_vendor"):
-            delete_memory(client_id, bank_id, delete_v)
-            st.success("Deleted")
+            delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"], key="delete_vendor_select")
+
+            if st.button("Delete Vendor", key="delete_vendor"):
+                delete_memory(client_id, bank_id, delete_v)
+                st.success("Deleted")
+        else:
+            st.warning("No memory found")
+
+    else:
+        st.warning("Select client and bank first")
 
 # ---------------- STOPWORDS ----------------
 if page == "Stopwords Manager":
