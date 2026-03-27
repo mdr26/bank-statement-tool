@@ -128,9 +128,13 @@ clients = get_clients()
 if "new_client_added" in st.session_state:
     clients = get_clients()  # refresh
 
-client_options = clients + ["➕ Add Client"]
+client_options = ["➕ Add Client"] + clients
 
-client = st.sidebar.selectbox("Client", client_options)
+client = st.sidebar.selectbox(
+    "Client",
+    client_options,
+    index=1 if len(clients) > 0 else 0
+)
 
 # ADD CLIENT
 if client == "➕ Add Client":
