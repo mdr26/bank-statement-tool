@@ -11,16 +11,12 @@ from database import (
 
 st.set_page_config(page_title="LedgerMind", layout="wide")
 
-# --------------------------------------------------
-# SESSION STATE
-# --------------------------------------------------
+# ---------------- SESSION ----------------
 
 if "df" not in st.session_state:
     st.session_state.df = None
 
-# --------------------------------------------------
-# STOPWORDS
-# --------------------------------------------------
+# ---------------- STOPWORDS ----------------
 
 def load_stopwords():
     try:
@@ -34,9 +30,7 @@ if "stopwords" not in st.session_state:
 
 STOP_WORDS = st.session_state.stopwords
 
-# --------------------------------------------------
-# CONSTANTS
-# --------------------------------------------------
+# ---------------- CONSTANTS ----------------
 
 COMPANY_WORDS = {
     "PVT","LTD","PRIVATE","LIMITED","INDIA","SERVICES",
@@ -55,9 +49,7 @@ LEDGER_GROUPS = sorted([
     "Sundry Debtors","Suspense A/c","Unsecured Loans"
 ])
 
-# --------------------------------------------------
-# FUNCTIONS
-# --------------------------------------------------
+# ---------------- FUNCTIONS ----------------
 
 def extract_head(text):
     text = str(text).upper()
@@ -85,7 +77,6 @@ def apply_vendor_memory(df, client_id, bank_id):
     df["Ledger"] = df["Transaction_Head"].map(
         lambda x: memory.get(x, ("", ""))[0]
     )
-
     df["Ledger Group"] = df["Transaction_Head"].map(
         lambda x: memory.get(x, ("", ""))[1]
     )
@@ -122,9 +113,7 @@ def prepare_tally_export(df, bank_name):
         ["Date","Ledger","Ledger Group","Narration","Debit","Credit","Bank Ledger","Voucher Type"]
     ]
 
-# --------------------------------------------------
-# SIDEBAR (FIXED PROPERLY)
-# --------------------------------------------------
+# ---------------- SIDEBAR ----------------
 
 st.sidebar.title("LedgerMind")
 
@@ -132,6 +121,7 @@ page = st.sidebar.selectbox("Menu",
     ["Classifier", "Memory Manager", "Stopwords Manager"]
 )
 
+# CLIENT
 clients = get_clients()
 client = st.sidebar.selectbox(
     "Client",
@@ -139,59 +129,64 @@ client = st.sidebar.selectbox(
     key="client_select"
 )
 
-# ADD CLIENT
 if client == "➕ Add Client":
 
     new_client = st.sidebar.text_input("New Client Name", key="new_client")
 
     if st.sidebar.button("Create Client", key="create_client_btn"):
-if new_client.strip():
-        clean_name = new_client.strip().upper()
-        add_client(clean_name)
+        if new_client.strip():
+            clean_name = new_client.strip().upper()
 
-        st.session_state.client_select = clean_name  # 🔥 THIS LINE FIXES EVERYTHING
+            if clean_name not in [c.upper() for c in clients]:
+                add_client(clean_name)
 
-        st.success("Client added")
-        st.rerun()
+            st.session_state.client_select = clean_name
+            st.success("Client added")
+            st.rerun()
 
-    if clean_name not in [c.upper() for c in clients]:
-    add_client(clean_name)
-
-# EXISTING CLIENT
 else:
 
     client_id = get_client_id(client)
 
-    # DELETE CLIENT (FIXED)
     if st.sidebar.button("🗑 Delete Client", key="delete_client_btn"):
         delete_client(client_id)
         st.success("Client deleted")
         st.rerun()
 
+    # BANK
     banks = get_banks(client_id)
-    bank = st.sidebar.selectbox("Bank", banks + ["➕ Add Bank"])
+
+    bank = st.sidebar.selectbox(
+        "Bank",
+        banks + ["➕ Add Bank"],
+        key="bank_select"
+    )
 
     if bank == "➕ Add Bank":
 
-        new_bank = st.sidebar.text_input("New Bank Name")
+        new_bank = st.sidebar.text_input("New Bank Name", key="new_bank")
 
-        if st.sidebar.button("Create Bank"):
-            add_bank(client_id, new_bank)
-            st.rerun()
+        if st.sidebar.button("Create Bank", key="create_bank_btn"):
+            if new_bank.strip():
+                clean_bank = new_bank.strip().upper()
+
+                if clean_bank not in [b.upper() for b in banks]:
+                    add_bank(client_id, clean_bank)
+
+                st.session_state.bank_select = clean_bank
+                st.success("Bank added")
+                st.rerun()
 
     else:
 
         bank_id = get_bank_id(client_id, bank)
 
-        # DELETE BANK
-        if st.sidebar.button("🗑 Delete Bank"):
+        if st.sidebar.button("🗑 Delete Bank", key="delete_bank_btn"):
             delete_bank(bank_id)
             st.success("Bank deleted")
             st.rerun()
 
-# --------------------------------------------------
-# CLASSIFIER
-# --------------------------------------------------
+# ---------------- CLASSIFIER ----------------
 
 if page == "Classifier":
 
@@ -250,7 +245,6 @@ if page == "Classifier":
 
         st.markdown("---")
 
-        # BULK ASSIGN
         unmapped = st.session_state.df[
             st.session_state.df["Ledger"] == ""
         ]["Transaction_Head"].unique()
@@ -264,8 +258,8 @@ if page == "Classifier":
                 save_vendor_memory(client_id, bank_id, v, ledger, group)
             st.success("Saved")
 
-        # DOWNLOAD
         st.markdown("---")
+
         export_df = prepare_tally_export(st.session_state.df, bank)
 
         st.download_button(
@@ -274,9 +268,7 @@ if page == "Classifier":
             "tally.csv"
         )
 
-# --------------------------------------------------
-# MEMORY MANAGER
-# --------------------------------------------------
+# ---------------- MEMORY ----------------
 
 if page == "Memory Manager":
 
@@ -309,9 +301,7 @@ if page == "Memory Manager":
             delete_memory(client_id, bank_id, delete_v)
             st.success("Deleted")
 
-# --------------------------------------------------
-# STOPWORDS MANAGER
-# --------------------------------------------------
+# ---------------- STOPWORDS ----------------
 
 if page == "Stopwords Manager":
 
