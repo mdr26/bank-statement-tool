@@ -145,7 +145,7 @@ if client == "➕ Add Client":
     new_client = st.sidebar.text_input("New Client Name", key="new_client")
 
     if st.sidebar.button("Create Client", key="create_client_btn"):
-    if new_client.strip():
+if new_client.strip():
         clean_name = new_client.strip().upper()
         add_client(clean_name)
 
@@ -153,7 +153,7 @@ if client == "➕ Add Client":
 
         st.success("Client added")
         st.rerun()
-        
+
     if clean_name not in [c.upper() for c in clients]:
     add_client(clean_name)
 
