@@ -133,22 +133,32 @@ page = st.sidebar.selectbox("Menu",
 )
 
 clients = get_clients()
-client = st.sidebar.selectbox("Client", clients + ["➕ Add Client"])
+client = st.sidebar.selectbox(
+    "Client",
+    clients + ["➕ Add Client"],
+    key="client_select"
+)
 
+# ADD CLIENT
 if client == "➕ Add Client":
 
-    new_client = st.sidebar.text_input("New Client Name")
+    new_client = st.sidebar.text_input("New Client Name", key="new_client")
 
-    if st.sidebar.button("Create Client"):
-        add_client(new_client)
-        st.rerun()
+    if st.sidebar.button("Create Client", key="create_client_btn"):
+        if new_client.strip():
+            add_client(new_client.strip())
+            st.success("Client added")
+            st.rerun()
+        else:
+            st.warning("Enter client name")
 
+# EXISTING CLIENT
 else:
 
     client_id = get_client_id(client)
 
-    # DELETE CLIENT
-    if st.sidebar.button("🗑 Delete Client"):
+    # DELETE CLIENT (FIXED)
+    if st.sidebar.button("🗑 Delete Client", key="delete_client_btn"):
         delete_client(client_id)
         st.success("Client deleted")
         st.rerun()
