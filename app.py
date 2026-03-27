@@ -2,11 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 import pdfplumber
-from dotenv import load_dotenv
-import os
-import psycopg2
-
-load_dotenv()
+from database import get_vendor_memory
 
 from database import (
     get_clients, add_client, get_client_id, delete_client,
@@ -24,31 +20,15 @@ if "df" not in st.session_state:
     st.session_state.df = None
 
 # --------------------------------------------------
-# STOPWORDS SYSTEM (FIXED)
+# STOPWORDS SYSTEM
 # --------------------------------------------------
 
 def load_stopwords():
     try:
-        file_path = os.path.join(os.getcwd(), "stopwords.xlsx")
-
-        if not os.path.exists(file_path):
-            st.error("❌ stopwords.xlsx not found in project")
-            return set()
-
-        df = pd.read_excel(file_path, header=None)
-
-        words = set(
-            df.iloc[:, 0]
-            .dropna()
-            .astype(str)
-            .str.upper()
-            .str.strip()
-        )
-
-        return words
-
-    except Exception as e:
-        st.error(f"Error loading stopwords: {e}")
+        df = pd.read_excel("stopwords.xlsx")
+        col = df.columns[0]
+        return set(df[col].dropna().astype(str).str.upper().str.strip())
+    except:
         return set()
 
 if "stopwords" not in st.session_state:
@@ -143,6 +123,28 @@ def parse_pdf_statement(file):
     return None
 
 # --------------------------------------------------
+# TALLY EXPORT
+# --------------------------------------------------
+
+def prepare_tally_export(df, bank_name):
+
+    export_df = df.copy()
+
+    def get_type(row):
+        if row["Credit"] > 0:
+            return "Receipt"
+        elif row["Debit"] > 0:
+            return "Payment"
+        return ""
+
+    export_df["Voucher Type"] = export_df.apply(get_type, axis=1)
+    export_df["Bank Ledger"] = bank_name
+
+    return export_df[
+        ["Date","Ledger","Ledger Group","Narration","Debit","Credit","Bank Ledger","Voucher Type"]
+    ]
+
+# --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 
@@ -153,6 +155,7 @@ page = st.sidebar.selectbox(
     ["Classifier", "Memory Manager", "Stopwords Manager"]
 )
 
+# CLIENT
 clients = get_clients()
 client = st.sidebar.selectbox("Client", clients + ["➕ Add Client"])
 
@@ -251,8 +254,10 @@ if page == "Classifier":
             dfs.append(df_temp)
 
         df = pd.concat(dfs, ignore_index=True)
+
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
+        # ✅ FIX APPLIED HERE
         if "client_id" in locals() and "bank_id" in locals():
             df = apply_vendor_memory(df, client_id, bank_id)
 
@@ -288,65 +293,3 @@ if page == "Classifier":
             st.cache_data.clear()
             st.success("Saved")
             st.rerun()
-
-# --------------------------------------------------
-# STOPWORDS MANAGER (FIXED)
-# --------------------------------------------------
-# --------------------------------------------------
-# STOPWORDS MANAGER (FULL CRUD)
-# --------------------------------------------------
-
-if page == "Stopwords Manager":
-
-    st.title("Stopwords Manager")
-
-    words = sorted(list(st.session_state.stopwords))
-
-    # DISPLAY
-    if not words:
-        st.warning("⚠️ No stopwords found.")
-    else:
-        st.dataframe(pd.DataFrame(words, columns=["Word"]), use_container_width=True)
-
-    st.markdown("---")
-
-    # ➕ ADD STOPWORD
-    st.subheader("Add Stopword")
-
-    new_word = st.text_input("Enter new stopword").upper().strip()
-
-    if st.button("Add Stopword"):
-        if not new_word:
-            st.warning("Enter a valid word")
-        elif new_word in st.session_state.stopwords:
-            st.warning(f"{new_word} already exists")
-        else:
-            st.session_state.stopwords.add(new_word)
-            st.success(f"{new_word} added")
-            st.rerun()
-
-    st.markdown("---")
-
-    # ❌ DELETE STOPWORD
-    st.subheader("Delete Stopword")
-
-    if words:
-        delete_word = st.selectbox("Select word to delete", words)
-
-        if st.button("Delete Stopword"):
-            st.session_state.stopwords.remove(delete_word)
-            st.success(f"{delete_word} removed")
-            st.rerun()
-
-    st.markdown("---")
-
-    # 💾 SAVE TO EXCEL
-    st.subheader("Save Changes")
-
-    if st.button("💾 Save Stopwords to File"):
-        try:
-            df = pd.DataFrame(sorted(st.session_state.stopwords), columns=["Word"])
-            df.to_excel("stopwords.xlsx", index=False)
-            st.success("Stopwords saved successfully!")
-        except Exception as e:
-            st.error(f"Error saving file: {e}")
