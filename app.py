@@ -145,12 +145,17 @@ if client == "➕ Add Client":
     new_client = st.sidebar.text_input("New Client Name", key="new_client")
 
     if st.sidebar.button("Create Client", key="create_client_btn"):
-        if new_client.strip():
-            add_client(new_client.strip())
-            st.success("Client added")
-            st.rerun()
-        else:
-            st.warning("Enter client name")
+    if new_client.strip():
+        clean_name = new_client.strip().upper()
+        add_client(clean_name)
+
+        st.session_state.client_select = clean_name  # 🔥 THIS LINE FIXES EVERYTHING
+
+        st.success("Client added")
+        st.rerun()
+        
+    if clean_name not in [c.upper() for c in clients]:
+    add_client(clean_name)
 
 # EXISTING CLIENT
 else:
