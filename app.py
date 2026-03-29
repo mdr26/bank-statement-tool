@@ -324,16 +324,30 @@ if page == "Stopwords Manager":
     new = st.text_input("Add Stopword").upper().strip()
 
     if st.button("Add Stopword"):
-        if new:
-            st.session_state.stopwords.add(new)
-            st.rerun()
+    if new:
+        st.session_state.stopwords.add(new)
+
+        # 🔥 Recompute if data exists
+        if st.session_state.get("df") is not None:
+            st.session_state.df["Transaction_Head"] = (
+                st.session_state.df["Narration"].apply(extract_head)
+            )
+
+        st.rerun()
 
     if words:
         delete_word = st.selectbox("Delete Stopword", words)
 
         if st.button("Delete Stopword"):
-            st.session_state.stopwords.discard(delete_word)
-            st.rerun()
+    st.session_state.stopwords.discard(delete_word)
+
+    # 🔥 Recompute again
+    if st.session_state.get("df") is not None:
+        st.session_state.df["Transaction_Head"] = (
+            st.session_state.df["Narration"].apply(extract_head)
+        )
+
+    st.rerun()
 
     if st.button("Save Stopwords"):
         pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False)
