@@ -11,7 +11,6 @@ def get_connection():
     return psycopg2.connect(db_url)
 
 # ---------------- CLIENTS ----------------
-@st.cache_data
 def get_clients():
     conn = get_connection()
     cur = conn.cursor()
@@ -53,7 +52,6 @@ def get_client_id(name):
 
 
 # ---------------- BANKS ----------------
-@st.cache_data
 def get_banks(client_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -96,7 +94,6 @@ def get_bank_id(client_id, bank_name):
 
 
 # ---------------- MEMORY ----------------
-@st.cache_data
 def get_vendor_memory(client_id, bank_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -105,7 +102,7 @@ def get_vendor_memory(client_id, bank_id):
     FROM vendor_memory
     WHERE client_id=%s AND bank_id=%s
     """, (client_id, bank_id))
-    data = {v:(l,g) for v,l,g in cur.fetchall()}
+    data = {v: (l, g) for v, l, g in cur.fetchall()}
     cur.close(); conn.close()
     return data
 
