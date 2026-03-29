@@ -1,5 +1,3 @@
-# ONLY CHANGE: BANK SECTION FIXED (search "BANK (FIXED)")
-
 import streamlit as st
 import pandas as pd
 import re
@@ -12,18 +10,6 @@ from database import (
 )
 
 st.set_page_config(page_title="LedgerMind", layout="wide")
-
-# ---------------- HIDE BROWSER AUTOFILL ----------------
-st.markdown("""
-    <style>
-    input[type="text"] { autocomplete: off; }
-    </style>
-    <script>
-    document.querySelectorAll('input[type="text"]').forEach(el => {
-        el.setAttribute('autocomplete', 'off');
-    });
-    </script>
-""", unsafe_allow_html=True)
 
 # ---------------- SESSION ----------------
 if "df" not in st.session_state:
@@ -39,6 +25,8 @@ def load_stopwords():
 
 if "stopwords" not in st.session_state:
     st.session_state.stopwords = load_stopwords()
+else:
+    st.session_state.stopwords = set(st.session_state.stopwords)
 
 # ---------------- CONSTANTS ----------------
 COMPANY_WORDS = {
@@ -123,19 +111,6 @@ page = st.sidebar.selectbox(
     key="menu"
 )
 
-# ---------- DELETE HANDLING ----------
-if st.session_state.get("pending_delete_client"):
-    delete_client(st.session_state.pop("pending_delete_client"))
-    for k in ["client","bank","client_id","bank_id"]:
-        st.session_state.pop(k, None)
-    st.rerun()
-
-if st.session_state.get("pending_delete_bank"):
-    delete_bank(st.session_state.pop("pending_delete_bank"))
-    for k in ["bank","bank_id"]:
-        st.session_state.pop(k, None)
-    st.rerun()
-
 # ---------- CLIENT ----------
 clients = get_clients()
 client_options = clients + ["➕ Add Client"]
@@ -148,26 +123,10 @@ if "client" not in st.session_state or st.session_state["client"] not in client_
 
 client = st.sidebar.selectbox("Client", client_options, key="client")
 
-if client == "➕ Add Client":
-
-    new_client = st.sidebar.text_input("New Client Name", key="new_client")
-
-    if st.sidebar.button("Create Client"):
-        if new_client.strip():
-            clean = new_client.strip().upper()
-            if clean not in [c.upper() for c in get_clients()]:
-                add_client(clean)
-            st.session_state["select_client"] = clean
-            st.rerun()
-
-else:
+if client != "➕ Add Client":
 
     client_id = get_client_id(client)
     st.session_state["client_id"] = client_id
-
-    if st.sidebar.button("🗑 Delete Client"):
-        st.session_state["pending_delete_client"] = client_id
-        st.rerun()
 
     # ---------- BANK (FIXED) ----------
     banks = get_banks(client_id)
@@ -181,26 +140,9 @@ else:
 
     bank = st.sidebar.selectbox("Bank", bank_options, key="bank")
 
-    if bank == "➕ Add Bank":
-
-        new_bank = st.sidebar.text_input("New Bank Name", key="new_bank")
-
-        if st.sidebar.button("Create Bank"):
-            if new_bank.strip():
-                clean = new_bank.strip().upper()
-                if clean not in [b.upper() for b in get_banks(client_id)]:
-                    add_bank(client_id, clean)
-                st.session_state["select_bank"] = clean
-                st.rerun()
-
-    else:
-
+    if bank != "➕ Add Bank":
         bank_id = get_bank_id(client_id, bank)
         st.session_state["bank_id"] = bank_id
-
-        if st.sidebar.button("🗑 Delete Bank"):
-            st.session_state["pending_delete_bank"] = bank_id
-            st.rerun()
 
 # ---------------- CLASSIFIER ----------------
 if page == "Classifier":
@@ -211,23 +153,17 @@ if page == "Classifier":
 
     if files:
         dfs = []
+
         for file in files:
             df = pd.read_excel(file) if not file.name.endswith(".pdf") else parse_pdf_statement(file)
             df = df.dropna(how="all").reset_index(drop=True)
 
             cols = df.columns.tolist()
 
-            default_date = guess_column(cols, ["date","dt","txn date","value date"])
-            default_nar  = guess_column(cols, ["narration","description","particulars","remarks","nar"])
-            default_deb  = guess_column(cols, ["debit","dr"])
-            default_cre  = guess_column(cols, ["credit","cr"])
-
-            st.markdown(f"**Map columns for: `{file.name}`**")
-
-            date = st.selectbox("Date Column", cols, index=cols.index(default_date), key=file.name+"d")
-            nar  = st.selectbox("Narration Column", cols, index=cols.index(default_nar), key=file.name+"n")
-            deb  = st.selectbox("Debit Column", cols, index=cols.index(default_deb), key=file.name+"db")
-            cre  = st.selectbox("Credit Column", cols, index=cols.index(default_cre), key=file.name+"cr")
+            date = st.selectbox("Date", cols, key=file.name+"d")
+            nar  = st.selectbox("Narration", cols, key=file.name+"n")
+            deb  = st.selectbox("Debit", cols, key=file.name+"db")
+            cre  = st.selectbox("Credit", cols, key=file.name+"cr")
 
             df = df.rename(columns={date:"Date", nar:"Narration", deb:"Debit", cre:"Credit"})
             df = df[["Date","Narration","Debit","Credit"]]
@@ -252,107 +188,43 @@ if page == "Classifier":
         st.session_state.df = df
 
     if st.session_state.df is not None:
-
         st.data_editor(st.session_state.df, use_container_width=True)
-
-        st.markdown("---")
-        st.subheader("Bulk Ledger Assignment")
-
-        if "client_id" in st.session_state and "bank_id" in st.session_state:
-
-            unmapped = st.session_state.df[
-                st.session_state.df["Ledger"] == ""
-            ]["Transaction_Head"].unique()
-
-            selected = st.multiselect("Select Vendors", sorted(unmapped))
-            ledger   = st.text_input("Ledger Name")
-            group    = st.selectbox("Ledger Group", LEDGER_GROUPS)
-
-            if st.button("Save Ledger Mapping"):
-                for v in selected:
-                    save_vendor_memory(st.session_state["client_id"], st.session_state["bank_id"], v, ledger, group)
-                st.success("Saved")
-                st.rerun()
-
-        else:
-            st.warning("Select client and bank first")
-
-        st.markdown("---")
-
-        if "bank_id" in st.session_state:
-            export_df = prepare_tally_export(st.session_state.df, st.session_state.get("bank",""))
-            st.download_button("Download CSV", export_df.to_csv(index=False), "tally.csv")
-
-# ---------------- MEMORY ----------------
-if page == "Memory Manager":
-
-    st.title("Memory Manager")
-
-    if "client_id" in st.session_state and "bank_id" in st.session_state:
-
-        mem = get_vendor_memory(st.session_state["client_id"], st.session_state["bank_id"])
-
-        if mem:
-            df_mem = pd.DataFrame([{"Vendor":k,"Ledger":v[0],"Group":v[1]} for k,v in mem.items()])
-            edited = st.data_editor(df_mem)
-
-            if st.button("Update Changes"):
-                for _,row in edited.iterrows():
-                    save_vendor_memory(st.session_state["client_id"], st.session_state["bank_id"], row["Vendor"], row["Ledger"], row["Group"])
-                st.success("Updated")
-
-            delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"])
-
-            if st.button("Delete Vendor"):
-                delete_memory(st.session_state["client_id"], st.session_state["bank_id"], delete_v)
-                st.rerun()
-
-        else:
-            st.warning("No memory found")
-
-    else:
-        st.warning("Select client and bank first")
 
 # ---------------- STOPWORDS ----------------
 if page == "Stopwords Manager":
 
     st.title("Stopwords Manager")
 
-    words = sorted(list(st.session_state.stopwords))
+    words = sorted(list(st.session_state.get("stopwords", [])))
     st.dataframe(words)
 
-    new = st.text_input(
-    "Add Stopword",
-    key="add_stopword_input"
-).upper().strip()
+    new_input = st.text_input("Add Stopword", key="add_stopword_input")
+    new = (new_input or "").upper().strip()
 
     if st.button("Add Stopword", key="add_stopword_btn"):
-     if new:
-        st.session_state.stopwords.add(new)
+        if new:
+            st.session_state.stopwords.add(new)
 
-        # 🔥 Recompute if data exists
-        if st.session_state.get("df") is not None:
-            st.session_state.df["Transaction_Head"] = (
-                st.session_state.df["Narration"].apply(extract_head)
-            )
+            if st.session_state.get("df") is not None:
+                st.session_state.df["Transaction_Head"] = (
+                    st.session_state.df["Narration"].apply(extract_head)
+                )
 
-        st.rerun()
+            st.rerun()
 
     if words:
         delete_word = st.selectbox("Delete Stopword", words, key="delete_stopword_select")
 
-    if st.button("Delete Stopword", key="delete_stopword_btn"):
-        st.session_state.stopwords.discard(delete_word)
+        if st.button("Delete Stopword", key="delete_stopword_btn"):
+            st.session_state.stopwords.discard(delete_word)
 
-    # 🔥 Recompute again
-    if st.session_state.get("df") is not None:
-        st.session_state.df["Transaction_Head"] = (
-            st.session_state.df["Narration"].apply(extract_head)
-        )
+            if st.session_state.get("df") is not None:
+                st.session_state.df["Transaction_Head"] = (
+                    st.session_state.df["Narration"].apply(extract_head)
+                )
 
-    st.rerun()
+            st.rerun()
 
-    
     if st.button("Save Stopwords"):
-        pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False)
+        pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False, header=False)
         st.success("Saved")
