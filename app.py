@@ -39,7 +39,6 @@ LEDGER_GROUPS = sorted([
 
 # ---------------- FUNCTIONS ----------------
 def extract_head(text):
-    # Always reads from session_state so stopword changes apply immediately
     stop_words = st.session_state.stopwords
 
     text = str(text).upper()
@@ -101,9 +100,29 @@ page = st.sidebar.selectbox(
     key="menu"
 )
 
+# ---------- HANDLE PENDING DELETES FIRST ----------
+# This runs at the top of every rerun, before any widget is rendered
+if st.session_state.get("pending_delete_client"):
+    client_id_to_delete = st.session_state.pop("pending_delete_client")
+    delete_client(client_id_to_delete)
+    for key in ["client", "bank", "client_id", "bank_id"]:
+        st.session_state.pop(key, None)
+    st.rerun()
+
+if st.session_state.get("pending_delete_bank"):
+    bank_id_to_delete = st.session_state.pop("pending_delete_bank")
+    delete_bank(bank_id_to_delete)
+    for key in ["bank", "bank_id"]:
+        st.session_state.pop(key, None)
+    st.rerun()
+
 # ---------- CLIENT ----------
 clients = get_clients()
 client_options = clients + ["➕ Add Client"]
+
+# Guard: if stored client no longer exists, reset it
+if st.session_state.get("client") not in client_options:
+    st.session_state.pop("client", None)
 
 client = st.sidebar.selectbox("Client", client_options, key="client")
 
@@ -124,19 +143,19 @@ if client == "➕ Add Client":
 else:
 
     client_id = get_client_id(client)
+    st.session_state["client_id"] = client_id
 
     if st.sidebar.button("🗑 Delete Client", key="delete_client"):
-        delete_client(client_id)
-        # Reset selectbox so it doesn't try to reselect the deleted client
-        del st.session_state["client"]
-        if "bank" in st.session_state:
-            del st.session_state["bank"]
-        st.success("Client deleted")
+        st.session_state["pending_delete_client"] = client_id
         st.rerun()
 
     # ---------- BANK ----------
     banks = get_banks(client_id)
     bank_options = banks + ["➕ Add Bank"]
+
+    # Guard: if stored bank no longer exists, reset it
+    if st.session_state.get("bank") not in bank_options:
+        st.session_state.pop("bank", None)
 
     bank = st.sidebar.selectbox("Bank", bank_options, key="bank")
 
@@ -157,12 +176,10 @@ else:
     else:
 
         bank_id = get_bank_id(client_id, bank)
+        st.session_state["bank_id"] = bank_id
 
         if st.sidebar.button("🗑 Delete Bank", key="delete_bank"):
-            delete_bank(bank_id)
-            # Reset bank selectbox so it doesn't try to reselect the deleted bank
-            del st.session_state["bank"]
-            st.success("Bank deleted")
+            st.session_state["pending_delete_bank"] = bank_id
             st.rerun()
 
 # ---------------- CLASSIFIER ----------------
@@ -182,25 +199,25 @@ if page == "Classifier":
             cols = df.columns.tolist()
 
             date = st.selectbox("Date Column", cols, key=file.name + "d")
-            nar = st.selectbox("Narration Column", cols, key=file.name + "n")
-            deb = st.selectbox("Debit Column", cols, key=file.name + "db")
-            cre = st.selectbox("Credit Column", cols, key=file.name + "cr")
+            nar  = st.selectbox("Narration Column", cols, key=file.name + "n")
+            deb  = st.selectbox("Debit Column", cols, key=file.name + "db")
+            cre  = st.selectbox("Credit Column", cols, key=file.name + "cr")
 
             df = df.rename(columns={
                 date: "Date", nar: "Narration", deb: "Debit", cre: "Credit"
             })
 
             df["Narration"] = df["Narration"].astype(str).str.upper()
-            df["Debit"] = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
-            df["Credit"] = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
+            df["Debit"]     = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
+            df["Credit"]    = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
 
             dfs.append(df)
 
         df = pd.concat(dfs, ignore_index=True)
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
-        if "client_id" in locals() and "bank_id" in locals():
-            df = apply_vendor_memory(df, client_id, bank_id)
+        if "client_id" in st.session_state and "bank_id" in st.session_state:
+            df = apply_vendor_memory(df, st.session_state["client_id"], st.session_state["bank_id"])
 
         st.session_state.df = df
 
@@ -212,29 +229,34 @@ if page == "Classifier":
         st.markdown("---")
         st.subheader("Bulk Ledger Assignment")
 
-        if "client_id" in locals() and "bank_id" in locals():
+        if "client_id" in st.session_state and "bank_id" in st.session_state:
+
+            client_id = st.session_state["client_id"]
+            bank_id   = st.session_state["bank_id"]
 
             unmapped = st.session_state.df[
                 st.session_state.df["Ledger"] == ""
             ]["Transaction_Head"].unique()
 
             selected = st.multiselect("Select Vendors", sorted(unmapped))
-            ledger = st.text_input("Ledger Name")
-            group = st.selectbox("Ledger Group", LEDGER_GROUPS)
+            ledger   = st.text_input("Ledger Name")
+            group    = st.selectbox("Ledger Group", LEDGER_GROUPS)
 
             if st.button("Save Ledger Mapping", key="bulk_save"):
                 for v in selected:
                     save_vendor_memory(client_id, bank_id, v, ledger, group)
                 st.success("Saved")
                 st.rerun()
+
         else:
             st.warning("Select client and bank first")
 
         # -------- DOWNLOAD --------
         st.markdown("---")
 
-        if "bank" in locals():
-            export_df = prepare_tally_export(st.session_state.df, bank)
+        if "bank_id" in st.session_state:
+            bank_name  = st.session_state.get("bank", "")
+            export_df  = prepare_tally_export(st.session_state.df, bank_name)
 
             st.download_button(
                 "Download CSV",
@@ -243,12 +265,15 @@ if page == "Classifier":
                 key="download"
             )
 
-# ---------------- MEMORY ----------------
+# ---------------- MEMORY MANAGER ----------------
 if page == "Memory Manager":
 
     st.title("Memory Manager")
 
-    if "client_id" in locals() and "bank_id" in locals():
+    if "client_id" in st.session_state and "bank_id" in st.session_state:
+
+        client_id = st.session_state["client_id"]
+        bank_id   = st.session_state["bank_id"]
 
         mem = get_vendor_memory(client_id, bank_id)
 
@@ -271,13 +296,15 @@ if page == "Memory Manager":
             if st.button("Delete Vendor", key="delete_vendor"):
                 delete_memory(client_id, bank_id, delete_v)
                 st.success("Deleted")
+                st.rerun()
+
         else:
             st.warning("No memory found")
 
     else:
         st.warning("Select client and bank first")
 
-# ---------------- STOPWORDS ----------------
+# ---------------- STOPWORDS MANAGER ----------------
 if page == "Stopwords Manager":
 
     st.title("Stopwords Manager")
@@ -290,7 +317,6 @@ if page == "Stopwords Manager":
     if st.button("Add Stopword", key="add_stopword"):
         if new:
             st.session_state.stopwords.add(new)
-            # Rerun so the dataframe above reflects the new word immediately
             st.rerun()
 
     if words:
