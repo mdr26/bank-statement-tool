@@ -61,7 +61,7 @@ def extract_head(text):
 def apply_vendor_memory(df, client_id, bank_id):
     memory = get_vendor_memory(client_id, bank_id)
 
-    df["Ledger"] = df["Transaction_Head"].map(lambda x: memory.get(x, ("", ""))[0])
+    df["Ledger"]       = df["Transaction_Head"].map(lambda x: memory.get(x, ("", ""))[0])
     df["Ledger Group"] = df["Transaction_Head"].map(lambda x: memory.get(x, ("", ""))[1])
 
     return df
@@ -91,6 +91,21 @@ def prepare_tally_export(df, bank_name):
     return export_df
 
 
+def parse_date_column(series):
+    try:
+        return pd.to_datetime(series).dt.strftime("%d-%m-%Y")
+    except:
+        return series
+
+
+def guess_column(cols, keywords):
+    for keyword in keywords:
+        for col in cols:
+            if keyword.lower() in str(col).lower():
+                return col
+    return cols[0]
+
+
 # ---------------- SIDEBAR ----------------
 st.sidebar.title("LedgerMind")
 
@@ -101,7 +116,6 @@ page = st.sidebar.selectbox(
 )
 
 # ---------- HANDLE PENDING DELETES FIRST ----------
-# This runs at the top of every rerun, before any widget is rendered
 if st.session_state.get("pending_delete_client"):
     client_id_to_delete = st.session_state.pop("pending_delete_client")
     delete_client(client_id_to_delete)
@@ -120,7 +134,6 @@ if st.session_state.get("pending_delete_bank"):
 clients = get_clients()
 client_options = clients + ["➕ Add Client"]
 
-# Guard: if stored client no longer exists, reset it
 if st.session_state.get("client") not in client_options:
     st.session_state.pop("client", None)
 
@@ -137,6 +150,9 @@ if client == "➕ Add Client":
             if clean not in [c.upper() for c in get_clients()]:
                 add_client(clean)
 
+            # Auto-select the new client on rerun
+            st.session_state["client"]    = clean
+            st.session_state["client_id"] = get_client_id(clean)
             st.success("Client added")
             st.rerun()
 
@@ -153,7 +169,6 @@ else:
     banks = get_banks(client_id)
     bank_options = banks + ["➕ Add Bank"]
 
-    # Guard: if stored bank no longer exists, reset it
     if st.session_state.get("bank") not in bank_options:
         st.session_state.pop("bank", None)
 
@@ -170,6 +185,9 @@ else:
                 if clean not in [b.upper() for b in get_banks(client_id)]:
                     add_bank(client_id, clean)
 
+                # Auto-select the new bank on rerun
+                st.session_state["bank"]    = clean
+                st.session_state["bank_id"] = get_bank_id(client_id, clean)
                 st.success("Bank added")
                 st.rerun()
 
@@ -196,20 +214,38 @@ if page == "Classifier":
         for file in files:
             df = pd.read_excel(file) if not file.name.endswith(".pdf") else parse_pdf_statement(file)
 
+            # Drop completely empty rows
+            df = df.dropna(how="all").reset_index(drop=True)
+
             cols = df.columns.tolist()
 
-            date = st.selectbox("Date Column", cols, key=file.name + "d")
-            nar  = st.selectbox("Narration Column", cols, key=file.name + "n")
-            deb  = st.selectbox("Debit Column", cols, key=file.name + "db")
-            cre  = st.selectbox("Credit Column", cols, key=file.name + "cr")
+            # Smart column guessing
+            default_date = guess_column(cols, ["date", "dt", "txn date", "value date"])
+            default_nar  = guess_column(cols, ["narration", "description", "particulars", "remarks", "nar"])
+            default_deb  = guess_column(cols, ["debit", "dr", "withdrawal", "withdraw"])
+            default_cre  = guess_column(cols, ["credit", "cr", "deposit"])
+
+            st.markdown(f"**Map columns for: `{file.name}`**")
+
+            date = st.selectbox("Date Column",      cols, index=cols.index(default_date), key=file.name + "d")
+            nar  = st.selectbox("Narration Column", cols, index=cols.index(default_nar),  key=file.name + "n")
+            deb  = st.selectbox("Debit Column",     cols, index=cols.index(default_deb),  key=file.name + "db")
+            cre  = st.selectbox("Credit Column",    cols, index=cols.index(default_cre),  key=file.name + "cr")
 
             df = df.rename(columns={
                 date: "Date", nar: "Narration", deb: "Debit", cre: "Credit"
             })
 
+            # Keep only the four mapped columns
+            df = df[["Date", "Narration", "Debit", "Credit"]]
+
+            df["Date"]      = parse_date_column(df["Date"])
             df["Narration"] = df["Narration"].astype(str).str.upper()
             df["Debit"]     = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
             df["Credit"]    = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
+
+            # Drop rows where both Debit and Credit are 0
+            df = df[(df["Debit"] != 0) | (df["Credit"] != 0)].reset_index(drop=True)
 
             dfs.append(df)
 
@@ -218,6 +254,9 @@ if page == "Classifier":
 
         if "client_id" in st.session_state and "bank_id" in st.session_state:
             df = apply_vendor_memory(df, st.session_state["client_id"], st.session_state["bank_id"])
+        else:
+            df["Ledger"]       = ""
+            df["Ledger Group"] = ""
 
         st.session_state.df = df
 
@@ -255,8 +294,8 @@ if page == "Classifier":
         st.markdown("---")
 
         if "bank_id" in st.session_state:
-            bank_name  = st.session_state.get("bank", "")
-            export_df  = prepare_tally_export(st.session_state.df, bank_name)
+            bank_name = st.session_state.get("bank", "")
+            export_df = prepare_tally_export(st.session_state.df, bank_name)
 
             st.download_button(
                 "Download CSV",
