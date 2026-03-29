@@ -26,21 +26,22 @@ def load_stopwords():
 if "stopwords" not in st.session_state:
     st.session_state.stopwords = load_stopwords()
 
-STOP_WORDS = st.session_state.stopwords
-
 # ---------------- CONSTANTS ----------------
 COMPANY_WORDS = {
-    "PVT","LTD","PRIVATE","LIMITED","INDIA","SERVICES",
-    "SERVICE","TECHNOLOGIES","TECH","PAYMENTS","PAYMENT"
+    "PVT", "LTD", "PRIVATE", "LIMITED", "INDIA", "SERVICES",
+    "SERVICE", "TECHNOLOGIES", "TECH", "PAYMENTS", "PAYMENT"
 }
 
 LEDGER_GROUPS = sorted([
-    "Bank Accounts","Cash-in-Hand","Direct Expenses","Indirect Expenses",
-    "Sales Accounts","Purchase Accounts","Sundry Creditors","Sundry Debtors"
+    "Bank Accounts", "Cash-in-Hand", "Direct Expenses", "Indirect Expenses",
+    "Sales Accounts", "Purchase Accounts", "Sundry Creditors", "Sundry Debtors"
 ])
 
 # ---------------- FUNCTIONS ----------------
 def extract_head(text):
+    # Always reads from session_state so stopword changes apply immediately
+    stop_words = st.session_state.stopwords
+
     text = str(text).upper()
     text = re.sub(r"\d+", " ", text)
     text = re.sub(r"[^A-Z ]", " ", text)
@@ -51,7 +52,7 @@ def extract_head(text):
     for token in tokens:
         if len(token) < 3:
             continue
-        if token in STOP_WORDS or token in COMPANY_WORDS:
+        if token in stop_words or token in COMPANY_WORDS:
             continue
         cleaned.append(token)
 
@@ -126,6 +127,10 @@ else:
 
     if st.sidebar.button("🗑 Delete Client", key="delete_client"):
         delete_client(client_id)
+        # Reset selectbox so it doesn't try to reselect the deleted client
+        del st.session_state["client"]
+        if "bank" in st.session_state:
+            del st.session_state["bank"]
         st.success("Client deleted")
         st.rerun()
 
@@ -155,6 +160,8 @@ else:
 
         if st.sidebar.button("🗑 Delete Bank", key="delete_bank"):
             delete_bank(bank_id)
+            # Reset bank selectbox so it doesn't try to reselect the deleted bank
+            del st.session_state["bank"]
             st.success("Bank deleted")
             st.rerun()
 
@@ -174,13 +181,13 @@ if page == "Classifier":
 
             cols = df.columns.tolist()
 
-            date = st.selectbox("Date Column", cols, key=file.name+"d")
-            nar = st.selectbox("Narration Column", cols, key=file.name+"n")
-            deb = st.selectbox("Debit Column", cols, key=file.name+"db")
-            cre = st.selectbox("Credit Column", cols, key=file.name+"cr")
+            date = st.selectbox("Date Column", cols, key=file.name + "d")
+            nar = st.selectbox("Narration Column", cols, key=file.name + "n")
+            deb = st.selectbox("Debit Column", cols, key=file.name + "db")
+            cre = st.selectbox("Credit Column", cols, key=file.name + "cr")
 
             df = df.rename(columns={
-                date:"Date", nar:"Narration", deb:"Debit", cre:"Credit"
+                date: "Date", nar: "Narration", deb: "Debit", cre: "Credit"
             })
 
             df["Narration"] = df["Narration"].astype(str).str.upper()
@@ -283,12 +290,15 @@ if page == "Stopwords Manager":
     if st.button("Add Stopword", key="add_stopword"):
         if new:
             st.session_state.stopwords.add(new)
+            # Rerun so the dataframe above reflects the new word immediately
+            st.rerun()
 
     if words:
         delete_word = st.selectbox("Delete Stopword", words, key="delete_stopword_select")
 
         if st.button("Delete Stopword", key="delete_stopword"):
-            st.session_state.stopwords.remove(delete_word)
+            st.session_state.stopwords.discard(delete_word)
+            st.rerun()
 
     if st.button("Save Stopwords", key="save_stopwords"):
         pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False)
