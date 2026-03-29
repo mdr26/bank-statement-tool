@@ -324,7 +324,7 @@ if page == "Stopwords Manager":
     new = st.text_input("Add Stopword").upper().strip()
 
     if st.button("Add Stopword"):
-    if new:
+     if new:
         st.session_state.stopwords.add(new)
 
         # 🔥 Recompute if data exists
