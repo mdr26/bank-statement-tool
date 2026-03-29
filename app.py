@@ -321,9 +321,12 @@ if page == "Stopwords Manager":
     words = sorted(list(st.session_state.stopwords))
     st.dataframe(words)
 
-    new = st.text_input("Add Stopword").upper().strip()
+    new = st.text_input(
+    "Add Stopword",
+    key="add_stopword_input"
+).upper().strip()
 
-    if st.button("Add Stopword"):
+    if st.button("Add Stopword", key="add_stopword_btn"):
      if new:
         st.session_state.stopwords.add(new)
 
@@ -336,9 +339,9 @@ if page == "Stopwords Manager":
         st.rerun()
 
     if words:
-        delete_word = st.selectbox("Delete Stopword", words)
+        delete_word = st.selectbox("Delete Stopword", words, key="delete_stopword_select")
 
-    if st.button("Delete Stopword"):
+    if st.button("Delete Stopword", key="delete_stopword_btn"):
         st.session_state.stopwords.discard(delete_word)
 
     # 🔥 Recompute again
