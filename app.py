@@ -131,13 +131,22 @@ if st.session_state.get("pending_delete_bank"):
     st.rerun()
 
 # ---------- CLIENT ----------
-clients = get_clients()
+clients     = get_clients()
 client_options = clients + ["➕ Add Client"]
 
-if st.session_state.get("client") not in client_options:
-    st.session_state.pop("client", None)
+# Resolve default index for client selectbox
+if st.session_state.get("select_client") in client_options:
+    default_client_index = client_options.index(st.session_state.pop("select_client"))
+else:
+    saved = st.session_state.get("client")
+    default_client_index = client_options.index(saved) if saved in client_options else 0
 
-client = st.sidebar.selectbox("Client", client_options, key="client")
+client = st.sidebar.selectbox(
+    "Client",
+    client_options,
+    index=default_client_index,
+    key="client"
+)
 
 if client == "➕ Add Client":
 
@@ -150,10 +159,7 @@ if client == "➕ Add Client":
             if clean not in [c.upper() for c in get_clients()]:
                 add_client(clean)
 
-            # Auto-select the new client on rerun
-            st.session_state["client"]    = clean
-            st.session_state["client_id"] = get_client_id(clean)
-            st.success("Client added")
+            st.session_state["select_client"] = clean
             st.rerun()
 
 else:
@@ -166,13 +172,22 @@ else:
         st.rerun()
 
     # ---------- BANK ----------
-    banks = get_banks(client_id)
+    banks      = get_banks(client_id)
     bank_options = banks + ["➕ Add Bank"]
 
-    if st.session_state.get("bank") not in bank_options:
-        st.session_state.pop("bank", None)
+    # Resolve default index for bank selectbox
+    if st.session_state.get("select_bank") in bank_options:
+        default_bank_index = bank_options.index(st.session_state.pop("select_bank"))
+    else:
+        saved = st.session_state.get("bank")
+        default_bank_index = bank_options.index(saved) if saved in bank_options else 0
 
-    bank = st.sidebar.selectbox("Bank", bank_options, key="bank")
+    bank = st.sidebar.selectbox(
+        "Bank",
+        bank_options,
+        index=default_bank_index,
+        key="bank"
+    )
 
     if bank == "➕ Add Bank":
 
@@ -185,10 +200,7 @@ else:
                 if clean not in [b.upper() for b in get_banks(client_id)]:
                     add_bank(client_id, clean)
 
-                # Auto-select the new bank on rerun
-                st.session_state["bank"]    = clean
-                st.session_state["bank_id"] = get_bank_id(client_id, clean)
-                st.success("Bank added")
+                st.session_state["select_bank"] = clean
                 st.rerun()
 
     else:
@@ -214,12 +226,10 @@ if page == "Classifier":
         for file in files:
             df = pd.read_excel(file) if not file.name.endswith(".pdf") else parse_pdf_statement(file)
 
-            # Drop completely empty rows
             df = df.dropna(how="all").reset_index(drop=True)
 
             cols = df.columns.tolist()
 
-            # Smart column guessing
             default_date = guess_column(cols, ["date", "dt", "txn date", "value date"])
             default_nar  = guess_column(cols, ["narration", "description", "particulars", "remarks", "nar"])
             default_deb  = guess_column(cols, ["debit", "dr", "withdrawal", "withdraw"])
@@ -236,7 +246,6 @@ if page == "Classifier":
                 date: "Date", nar: "Narration", deb: "Debit", cre: "Credit"
             })
 
-            # Keep only the four mapped columns
             df = df[["Date", "Narration", "Debit", "Credit"]]
 
             df["Date"]      = parse_date_column(df["Date"])
@@ -244,7 +253,6 @@ if page == "Classifier":
             df["Debit"]     = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
             df["Credit"]    = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
 
-            # Drop rows where both Debit and Credit are 0
             df = df[(df["Debit"] != 0) | (df["Credit"] != 0)].reset_index(drop=True)
 
             dfs.append(df)
