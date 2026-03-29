@@ -338,8 +338,8 @@ if page == "Stopwords Manager":
     if words:
         delete_word = st.selectbox("Delete Stopword", words)
 
-        if st.button("Delete Stopword"):
-    st.session_state.stopwords.discard(delete_word)
+    if st.button("Delete Stopword"):
+        st.session_state.stopwords.discard(delete_word)
 
     # 🔥 Recompute again
     if st.session_state.get("df") is not None:
@@ -349,6 +349,7 @@ if page == "Stopwords Manager":
 
     st.rerun()
 
+    
     if st.button("Save Stopwords"):
         pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False)
         st.success("Saved")
