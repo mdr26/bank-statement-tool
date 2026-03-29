@@ -129,7 +129,7 @@ page = st.sidebar.selectbox(
     key="menu"
 )
 
-# ---------- HANDLE PENDING DELETES FIRST ----------
+# ---------- HANDLE PENDING DELETES ----------
 if st.session_state.get("pending_delete_client"):
     client_id_to_delete = st.session_state.pop("pending_delete_client")
     delete_client(client_id_to_delete)
@@ -148,31 +148,19 @@ if st.session_state.get("pending_delete_bank"):
 clients        = get_clients()
 client_options = clients + ["➕ Add Client"]
 
-# Resolve client index
 if "select_client" in st.session_state:
-    sc = st.session_state.pop("select_client")
-    default_client_index = client_options.index(sc) if sc in client_options else 0
-elif st.session_state.get("client") in client_options:
-    default_client_index = client_options.index(st.session_state["client"])
-else:
-    default_client_index = 0
+    st.session_state["client"] = st.session_state.pop("select_client")
 
-client = st.sidebar.selectbox(
-    "Client",
-    client_options,
-    index=default_client_index,
-    key="client"
-)
+if "client" not in st.session_state or st.session_state["client"] not in client_options:
+    st.session_state["client"] = client_options[0]
+
+client = st.sidebar.selectbox("Client", client_options, key="client")
 
 if client == "➕ Add Client":
 
-    new_client = st.sidebar.text_input(
-        "New Client Name",
-        key="new_client",
-        placeholder="Enter client name"
-    )
+    new_client = st.sidebar.text_input("New Client Name", key="new_client")
 
-    if st.sidebar.button("Create Client", key="create_client"):
+    if st.sidebar.button("Create Client"):
         if new_client.strip():
             clean = new_client.strip().upper()
 
@@ -181,50 +169,33 @@ if client == "➕ Add Client":
 
             st.session_state["select_client"] = clean
             st.rerun()
-        else:
-            st.sidebar.warning("Enter a client name")
 
 else:
 
     client_id = get_client_id(client)
     st.session_state["client_id"] = client_id
 
-    if st.sidebar.button("🗑 Delete Client", key="delete_client"):
+    if st.sidebar.button("🗑 Delete Client"):
         st.session_state["pending_delete_client"] = client_id
         st.rerun()
 
-    # ---------- BANK ----------
-    banks        = get_banks(client_id)
+    # ---------- BANK (FIXED) ----------
+    banks = get_banks(client_id)
     bank_options = banks + ["➕ Add Bank"]
 
-    # Resolve bank index
-    if "select_bank" in st.session_state:
-        sb = st.session_state.pop("select_bank")
-        # Refetch banks to make sure the new one is included
-        banks        = get_banks(client_id)
-        bank_options = banks + ["➕ Add Bank"]
-        default_bank_index = bank_options.index(sb) if sb in bank_options else 0
-    elif st.session_state.get("bank") in bank_options:
-        default_bank_index = bank_options.index(st.session_state["bank"])
-    else:
-        default_bank_index = 0
+    if "bank" not in st.session_state or st.session_state["bank"] not in bank_options:
+        st.session_state["bank"] = bank_options[0]
 
-    bank = st.sidebar.selectbox(
-        "Bank",
-        bank_options,
-        index=default_bank_index,
-        key="bank"
-    )
+    if "select_bank" in st.session_state:
+        st.session_state["bank"] = st.session_state.pop("select_bank")
+
+    bank = st.sidebar.selectbox("Bank", bank_options, key="bank")
 
     if bank == "➕ Add Bank":
 
-        new_bank = st.sidebar.text_input(
-            "New Bank Name",
-            key="new_bank",
-            placeholder="Enter bank name"
-        )
+        new_bank = st.sidebar.text_input("New Bank Name", key="new_bank")
 
-        if st.sidebar.button("Create Bank", key="create_bank"):
+        if st.sidebar.button("Create Bank"):
             if new_bank.strip():
                 clean = new_bank.strip().upper()
 
@@ -233,15 +204,13 @@ else:
 
                 st.session_state["select_bank"] = clean
                 st.rerun()
-            else:
-                st.sidebar.warning("Enter a bank name")
 
     else:
 
         bank_id = get_bank_id(client_id, bank)
         st.session_state["bank_id"] = bank_id
 
-        if st.sidebar.button("🗑 Delete Bank", key="delete_bank"):
+        if st.sidebar.button("🗑 Delete Bank"):
             st.session_state["pending_delete_bank"] = bank_id
             st.rerun()
 
@@ -263,153 +232,58 @@ if page == "Classifier":
 
             cols = df.columns.tolist()
 
-            default_date = guess_column(cols, ["date", "dt", "txn date", "value date"])
-            default_nar  = guess_column(cols, ["narration", "description", "particulars", "remarks", "nar"])
-            default_deb  = guess_column(cols, ["debit", "dr", "withdrawal", "withdraw"])
-            default_cre  = guess_column(cols, ["credit", "cr", "deposit"])
+            default_date = guess_column(cols, ["date"])
+            default_nar  = guess_column(cols, ["narration"])
+            default_deb  = guess_column(cols, ["debit"])
+            default_cre  = guess_column(cols, ["credit"])
 
-            st.markdown(f"**Map columns for: `{file.name}`**")
+            date = st.selectbox("Date", cols, key=file.name+"d")
+            nar  = st.selectbox("Narration", cols, key=file.name+"n")
+            deb  = st.selectbox("Debit", cols, key=file.name+"db")
+            cre  = st.selectbox("Credit", cols, key=file.name+"cr")
 
-            date = st.selectbox("Date Column",      cols, index=cols.index(default_date), key=file.name + "d")
-            nar  = st.selectbox("Narration Column", cols, index=cols.index(default_nar),  key=file.name + "n")
-            deb  = st.selectbox("Debit Column",     cols, index=cols.index(default_deb),  key=file.name + "db")
-            cre  = st.selectbox("Credit Column",    cols, index=cols.index(default_cre),  key=file.name + "cr")
+            df = df.rename(columns={date:"Date", nar:"Narration", deb:"Debit", cre:"Credit"})
+            df = df[["Date","Narration","Debit","Credit"]]
 
-            df = df.rename(columns={
-                date: "Date", nar: "Narration", deb: "Debit", cre: "Credit"
-            })
-
-            df = df[["Date", "Narration", "Debit", "Credit"]]
-
-            df["Date"]      = parse_date_column(df["Date"])
+            df["Date"] = parse_date_column(df["Date"])
             df["Narration"] = df["Narration"].astype(str).str.upper()
-            df["Debit"]     = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
-            df["Credit"]    = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
+            df["Debit"] = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
+            df["Credit"] = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
 
-            df = df[(df["Debit"] != 0) | (df["Credit"] != 0)].reset_index(drop=True)
-
+            df = df[(df["Debit"] != 0) | (df["Credit"] != 0)]
             dfs.append(df)
 
-        df = pd.concat(dfs, ignore_index=True)
+        df = pd.concat(dfs)
         df["Transaction_Head"] = df["Narration"].apply(extract_head)
 
         if "client_id" in st.session_state and "bank_id" in st.session_state:
             df = apply_vendor_memory(df, st.session_state["client_id"], st.session_state["bank_id"])
         else:
-            df["Ledger"]       = ""
+            df["Ledger"] = ""
             df["Ledger Group"] = ""
 
         st.session_state.df = df
 
     if st.session_state.df is not None:
 
-        st.data_editor(st.session_state.df, use_container_width=True)
+        st.data_editor(st.session_state.df)
 
-        # -------- BULK ASSIGN --------
-        st.markdown("---")
         st.subheader("Bulk Ledger Assignment")
 
         if "client_id" in st.session_state and "bank_id" in st.session_state:
-
-            client_id = st.session_state["client_id"]
-            bank_id   = st.session_state["bank_id"]
 
             unmapped = st.session_state.df[
                 st.session_state.df["Ledger"] == ""
             ]["Transaction_Head"].unique()
 
-            selected = st.multiselect("Select Vendors", sorted(unmapped))
-            ledger   = st.text_input("Ledger Name")
-            group    = st.selectbox("Ledger Group", LEDGER_GROUPS)
+            selected = st.multiselect("Select Vendors", unmapped)
+            ledger = st.text_input("Ledger Name")
+            group = st.selectbox("Ledger Group", LEDGER_GROUPS)
 
-            if st.button("Save Ledger Mapping", key="bulk_save"):
+            if st.button("Save Ledger Mapping"):
                 for v in selected:
-                    save_vendor_memory(client_id, bank_id, v, ledger, group)
-                st.success("Saved")
+                    save_vendor_memory(st.session_state["client_id"], st.session_state["bank_id"], v, ledger, group)
                 st.rerun()
 
         else:
             st.warning("Select client and bank first")
-
-        # -------- DOWNLOAD --------
-        st.markdown("---")
-
-        if "bank_id" in st.session_state:
-            bank_name = st.session_state.get("bank", "")
-            export_df = prepare_tally_export(st.session_state.df, bank_name)
-
-            st.download_button(
-                "Download CSV",
-                export_df.to_csv(index=False),
-                "tally.csv",
-                key="download"
-            )
-
-# ---------------- MEMORY MANAGER ----------------
-if page == "Memory Manager":
-
-    st.title("Memory Manager")
-
-    if "client_id" in st.session_state and "bank_id" in st.session_state:
-
-        client_id = st.session_state["client_id"]
-        bank_id   = st.session_state["bank_id"]
-
-        mem = get_vendor_memory(client_id, bank_id)
-
-        if mem:
-
-            df_mem = pd.DataFrame([
-                {"Vendor": k, "Ledger": v[0], "Group": v[1]}
-                for k, v in mem.items()
-            ])
-
-            edited = st.data_editor(df_mem)
-
-            if st.button("Update Changes", key="update_memory"):
-                for _, row in edited.iterrows():
-                    save_vendor_memory(client_id, bank_id, row["Vendor"], row["Ledger"], row["Group"])
-                st.success("Updated")
-
-            delete_v = st.selectbox("Delete Vendor", df_mem["Vendor"], key="delete_vendor_select")
-
-            if st.button("Delete Vendor", key="delete_vendor"):
-                delete_memory(client_id, bank_id, delete_v)
-                st.success("Deleted")
-                st.rerun()
-
-        else:
-            st.warning("No memory found")
-
-    else:
-        st.warning("Select client and bank first")
-
-# ---------------- STOPWORDS MANAGER ----------------
-if page == "Stopwords Manager":
-
-    st.title("Stopwords Manager")
-
-    words = sorted(list(st.session_state.stopwords))
-    st.dataframe(words)
-
-    new = st.text_input(
-        "Add Stopword",
-        key="new_stopword",
-        placeholder="Enter stopword"
-    ).upper().strip()
-
-    if st.button("Add Stopword", key="add_stopword"):
-        if new:
-            st.session_state.stopwords.add(new)
-            st.rerun()
-
-    if words:
-        delete_word = st.selectbox("Delete Stopword", words, key="delete_stopword_select")
-
-        if st.button("Delete Stopword", key="delete_stopword"):
-            st.session_state.stopwords.discard(delete_word)
-            st.rerun()
-
-    if st.button("Save Stopwords", key="save_stopwords"):
-        pd.DataFrame(sorted(st.session_state.stopwords)).to_excel("stopwords.xlsx", index=False)
-        st.success("Saved")
