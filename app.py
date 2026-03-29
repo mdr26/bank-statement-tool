@@ -11,6 +11,20 @@ from database import (
 
 st.set_page_config(page_title="LedgerMind", layout="wide")
 
+# ---------------- HIDE BROWSER AUTOFILL ----------------
+st.markdown("""
+    <style>
+    input[type="text"] {
+        autocomplete: off;
+    }
+    </style>
+    <script>
+    document.querySelectorAll('input[type="text"]').forEach(el => {
+        el.setAttribute('autocomplete', 'off');
+    });
+    </script>
+""", unsafe_allow_html=True)
+
 # ---------------- SESSION ----------------
 if "df" not in st.session_state:
     st.session_state.df = None
@@ -131,15 +145,17 @@ if st.session_state.get("pending_delete_bank"):
     st.rerun()
 
 # ---------- CLIENT ----------
-clients     = get_clients()
+clients        = get_clients()
 client_options = clients + ["➕ Add Client"]
 
-# Resolve default index for client selectbox
-if st.session_state.get("select_client") in client_options:
-    default_client_index = client_options.index(st.session_state.pop("select_client"))
+# Resolve client index
+if "select_client" in st.session_state:
+    sc = st.session_state.pop("select_client")
+    default_client_index = client_options.index(sc) if sc in client_options else 0
+elif st.session_state.get("client") in client_options:
+    default_client_index = client_options.index(st.session_state["client"])
 else:
-    saved = st.session_state.get("client")
-    default_client_index = client_options.index(saved) if saved in client_options else 0
+    default_client_index = 0
 
 client = st.sidebar.selectbox(
     "Client",
@@ -150,7 +166,11 @@ client = st.sidebar.selectbox(
 
 if client == "➕ Add Client":
 
-    new_client = st.sidebar.text_input("New Client Name", key="new_client")
+    new_client = st.sidebar.text_input(
+        "New Client Name",
+        key="new_client",
+        placeholder="Enter client name"
+    )
 
     if st.sidebar.button("Create Client", key="create_client"):
         if new_client.strip():
@@ -161,6 +181,8 @@ if client == "➕ Add Client":
 
             st.session_state["select_client"] = clean
             st.rerun()
+        else:
+            st.sidebar.warning("Enter a client name")
 
 else:
 
@@ -172,15 +194,20 @@ else:
         st.rerun()
 
     # ---------- BANK ----------
-    banks      = get_banks(client_id)
+    banks        = get_banks(client_id)
     bank_options = banks + ["➕ Add Bank"]
 
-    # Resolve default index for bank selectbox
-    if st.session_state.get("select_bank") in bank_options:
-        default_bank_index = bank_options.index(st.session_state.pop("select_bank"))
+    # Resolve bank index
+    if "select_bank" in st.session_state:
+        sb = st.session_state.pop("select_bank")
+        # Refetch banks to make sure the new one is included
+        banks        = get_banks(client_id)
+        bank_options = banks + ["➕ Add Bank"]
+        default_bank_index = bank_options.index(sb) if sb in bank_options else 0
+    elif st.session_state.get("bank") in bank_options:
+        default_bank_index = bank_options.index(st.session_state["bank"])
     else:
-        saved = st.session_state.get("bank")
-        default_bank_index = bank_options.index(saved) if saved in bank_options else 0
+        default_bank_index = 0
 
     bank = st.sidebar.selectbox(
         "Bank",
@@ -191,7 +218,11 @@ else:
 
     if bank == "➕ Add Bank":
 
-        new_bank = st.sidebar.text_input("New Bank Name", key="new_bank")
+        new_bank = st.sidebar.text_input(
+            "New Bank Name",
+            key="new_bank",
+            placeholder="Enter bank name"
+        )
 
         if st.sidebar.button("Create Bank", key="create_bank"):
             if new_bank.strip():
@@ -202,6 +233,8 @@ else:
 
                 st.session_state["select_bank"] = clean
                 st.rerun()
+            else:
+                st.sidebar.warning("Enter a bank name")
 
     else:
 
@@ -359,7 +392,11 @@ if page == "Stopwords Manager":
     words = sorted(list(st.session_state.stopwords))
     st.dataframe(words)
 
-    new = st.text_input("Add Stopword", key="new_stopword").upper().strip()
+    new = st.text_input(
+        "Add Stopword",
+        key="new_stopword",
+        placeholder="Enter stopword"
+    ).upper().strip()
 
     if st.button("Add Stopword", key="add_stopword"):
         if new:
