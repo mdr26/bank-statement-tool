@@ -1,7 +1,0 @@
-streamlit
-pandas
-openpyxl
-numpy
-psycopg2-binary
-pdfplumber
-python-dotenv
