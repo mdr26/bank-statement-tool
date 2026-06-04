@@ -449,7 +449,7 @@ with tab1:
     files = st.file_uploader(
         "Upload bank statements — upload multiple files for interbank detection",
         accept_multiple_files=True,
-        type=["xlsx", "xls", "pdf"]
+        type=["xlsx", "xls", "pdf" , "csv"]
     )
 
     if files:
@@ -458,12 +458,14 @@ with tab1:
         for file in files:
             try:
                 if file.name.lower().endswith(".pdf"):
-                    df_raw = parse_pdf_statement(file)
-                    if df_raw is None:
-                        st.error(f"Could not extract table from {file.name}.")
-                        continue
-                else:
-                    df_raw = pd.read_excel(file)
+    df_raw = parse_pdf_statement(file)
+    if df_raw is None:
+        st.error(f"Could not extract table from {file.name}.")
+        continue
+elif file.name.lower().endswith(".csv"):
+    df_raw = pd.read_csv(file)
+else:
+    df_raw = pd.read_excel(file)
 
                 df_raw = df_raw.dropna(how="all").reset_index(drop=True)
                 cols   = df_raw.columns.tolist()
