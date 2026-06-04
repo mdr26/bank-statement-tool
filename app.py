@@ -28,31 +28,8 @@ html, body, [class*="css"] {
 
 #MainMenu, footer, header { visibility: hidden; }
 
-/* Hide sidebar completely */
 [data-testid="stSidebar"] { display: none !important; }
 [data-testid="collapsedControl"] { display: none !important; }
-
-/* Top nav bar */
-.topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 2rem;
-    background: #0a1a12;
-    border-bottom: 1px solid #1d4a2d;
-    margin: -1rem -1rem 2rem -1rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-.brand {
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 600;
-    font-size: 1.3rem;
-    color: #e8f5ee;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-}
-.brand span { color: #3ecf8e; }
 
 .page-title {
     font-family: 'IBM Plex Mono', monospace;
@@ -67,18 +44,13 @@ html, body, [class*="css"] {
     margin-bottom: 1.5rem;
     font-family: 'IBM Plex Mono', monospace;
 }
-
-.context-bar {
-    background: #0a1a12;
-    border: 1px solid #1d4a2d;
-    border-radius: 8px;
-    padding: 0.75rem 1.25rem;
-    margin-bottom: 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
+.brand {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 1.4rem;
+    color: #e8f5ee;
 }
+.brand span { color: #3ecf8e; }
 
 .metric-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .metric-badge {
@@ -188,6 +160,7 @@ hr { border-color: #1d4a2d !important; }
 </style>
 """, unsafe_allow_html=True)
 
+
 # ─────────────────────────────────────────────
 #  CONSTANTS
 # ─────────────────────────────────────────────
@@ -202,6 +175,7 @@ LEDGER_GROUPS = sorted([
     "Sales Accounts", "Purchase Accounts", "Sundry Creditors", "Sundry Debtors"
 ])
 
+
 # ─────────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────────
@@ -213,17 +187,16 @@ for key in ["df", "client_id", "bank_id"]:
 if "stopwords" not in st.session_state:
     try:
         st.session_state.stopwords = get_stopwords()
-    except Exception as e:
+    except Exception:
         st.session_state.stopwords = set()
 
-if "page" not in st.session_state:
-    st.session_state.page = "📊 Classifier"
 
 # ─────────────────────────────────────────────
 #  HELPER FUNCTIONS
 # ─────────────────────────────────────────────
 
 def clean_number(val):
+    """Convert any number format to float — handles ₹, commas, blanks, dashes."""
     if pd.isna(val):
         return 0.0
     s = str(val).strip()
@@ -238,6 +211,7 @@ def clean_number(val):
 
 
 def extract_head(text):
+    """Clean a narration down to a meaningful transaction head."""
     stop_words = st.session_state.stopwords
     text = str(text).upper()
     text = re.sub(r"\d+", " ", text)
@@ -248,6 +222,7 @@ def extract_head(text):
 
 
 def apply_vendor_memory(df, client_id, bank_id):
+    """Apply saved ledger mappings. Never overwrites Interbank rows."""
     memory = get_vendor_memory(client_id, bank_id)
     for idx, row in df.iterrows():
         if row.get("Ledger") == "Interbank":
@@ -260,22 +235,24 @@ def apply_vendor_memory(df, client_id, bank_id):
 
 
 def detect_interbank(dfs_with_names):
+    """Find same date + same amount across 2+ different bank files."""
     if len(dfs_with_names) < 2:
         return set()
-    interbank_keys = {}
+    key_banks = {}
     for bank_name, df in dfs_with_names:
-        for idx, row in df.iterrows():
+        for _, row in df.iterrows():
             date   = str(row["Date"])
             amount = row["Debit"] if row["Debit"] > 0 else row["Credit"]
             if amount > 0:
                 key = (date, amount)
-                if key not in interbank_keys:
-                    interbank_keys[key] = set()
-                interbank_keys[key].add(bank_name)
-    return {key for key, banks in interbank_keys.items() if len(banks) >= 2}
+                if key not in key_banks:
+                    key_banks[key] = set()
+                key_banks[key].add(bank_name)
+    return {key for key, banks in key_banks.items() if len(banks) >= 2}
 
 
 def parse_pdf_statement(file):
+    """Extract tables from a PDF bank statement."""
     tables = []
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
@@ -310,21 +287,26 @@ def prepare_tally_export(df, bank_name):
     return export_df
 
 
-# ─────────────────────────────────────────────
-#  TOP NAV BAR
-# ─────────────────────────────────────────────
+def read_file(file):
+    """Read Excel, CSV, or PDF into a dataframe."""
+    name = file.name.lower()
+    if name.endswith(".pdf"):
+        df = parse_pdf_statement(file)
+        if df is None:
+            st.error(f"Could not extract table from {file.name}.")
+        return df
+    elif name.endswith(".csv"):
+        return pd.read_csv(file)
+    else:
+        return pd.read_excel(file)
 
-st.markdown('<div class="topbar"><div class="brand">Ledger<span>Mind</span></div></div>', unsafe_allow_html=True)
-
-# Navigation tabs
-tab1, tab2, tab3 = st.tabs(["📊 Classifier", "🧠 Memory Manager", "🔤 Stopwords Manager"])
 
 # ─────────────────────────────────────────────
-#  CLIENT / BANK SELECTOR (shown on all tabs)
+#  CLIENT / BANK SELECTOR
 # ─────────────────────────────────────────────
 
 def render_client_bank_selector(suffix=""):
-    """Renders client+bank dropdowns. suffix makes widget keys unique per tab."""
+    """Renders client + bank dropdowns inline. Returns True if both are selected."""
 
     if st.session_state.get(f"pending_delete_client_{suffix}"):
         try:
@@ -343,25 +325,20 @@ def render_client_bank_selector(suffix=""):
         st.session_state.bank_id = None
         st.rerun()
 
-    clients = get_clients()
+    clients        = get_clients()
     client_options = clients + ["➕ Add New Client"]
 
     col1, col2, col3, col4, col5 = st.columns([2, 1, 2, 1, 2])
 
     with col1:
         if f"sel_client_{suffix}" in st.session_state:
-            default_client = st.session_state.pop(f"sel_client_{suffix}")
-            if default_client in client_options:
-                idx = client_options.index(default_client)
-            else:
-                idx = 0
+            default = st.session_state.pop(f"sel_client_{suffix}")
+            idx = client_options.index(default) if default in client_options else 0
         else:
             idx = 0
         client = st.selectbox("Client", client_options, index=idx, key=f"client_dd_{suffix}")
 
     if client == "➕ Add New Client":
-        with col2:
-            st.markdown("<br>", unsafe_allow_html=True)
         with col3:
             new_client = st.text_input("New client name", key=f"new_client_{suffix}")
         with col4:
@@ -385,13 +362,13 @@ def render_client_bank_selector(suffix=""):
             st.session_state[f"pending_delete_client_{suffix}"] = client_id
             st.rerun()
 
-    banks = get_banks(client_id)
+    banks        = get_banks(client_id)
     bank_options = banks + ["➕ Add New Bank"]
 
     with col3:
         if f"sel_bank_{suffix}" in st.session_state:
-            default_bank = st.session_state.pop(f"sel_bank_{suffix}")
-            bidx = bank_options.index(default_bank) if default_bank in bank_options else 0
+            default = st.session_state.pop(f"sel_bank_{suffix}")
+            bidx = bank_options.index(default) if default in bank_options else 0
         else:
             bidx = 0
         bank = st.selectbox("Bank", bank_options, index=bidx, key=f"bank_dd_{suffix}")
@@ -411,7 +388,8 @@ def render_client_bank_selector(suffix=""):
         return False
 
     bank_id = get_bank_id(client_id, bank)
-    st.session_state.bank_id = bank_id
+    st.session_state.bank_id   = bank_id
+    st.session_state[f"current_bank_name_{suffix}"] = bank
 
     with col4:
         st.markdown("<br>", unsafe_allow_html=True)
@@ -427,7 +405,16 @@ def render_client_bank_selector(suffix=""):
             unsafe_allow_html=True
         )
 
-    return True  # client and bank are selected
+    return True
+
+
+# ─────────────────────────────────────────────
+#  TOP BRAND
+# ─────────────────────────────────────────────
+
+st.markdown('<p class="brand">Ledger<span>Mind</span></p>', unsafe_allow_html=True)
+
+tab1, tab2, tab3 = st.tabs(["📊 Classifier", "🧠 Memory Manager", "🔤 Stopwords Manager"])
 
 
 # ─────────────────────────────────────────────
@@ -447,9 +434,9 @@ with tab1:
     st.markdown("---")
 
     files = st.file_uploader(
-        "Upload bank statements — upload multiple files for interbank detection",
+        "Upload bank statements — multiple files supported for interbank detection",
         accept_multiple_files=True,
-        type=["xlsx", "xls", "pdf" , "csv"]
+        type=["xlsx", "xls", "csv", "pdf"]
     )
 
     if files:
@@ -457,15 +444,9 @@ with tab1:
 
         for file in files:
             try:
-                if file.name.lower().endswith(".pdf"):
-    df_raw = parse_pdf_statement(file)
-    if df_raw is None:
-        st.error(f"Could not extract table from {file.name}.")
-        continue
-elif file.name.lower().endswith(".csv"):
-    df_raw = pd.read_csv(file)
-else:
-    df_raw = pd.read_excel(file)
+                df_raw = read_file(file)
+                if df_raw is None:
+                    continue
 
                 df_raw = df_raw.dropna(how="all").reset_index(drop=True)
                 cols   = df_raw.columns.tolist()
@@ -481,8 +462,11 @@ else:
                 with c4:
                     cre_col  = st.selectbox("Credit", cols, index=cols.index(guess_column(cols, ["credit","cr"])), key=file.name+"cr")
 
-                df_raw = df_raw.rename(columns={date_col:"Date", nar_col:"Narration", deb_col:"Debit", cre_col:"Credit"})
-                df_raw = df_raw[["Date","Narration","Debit","Credit"]]
+                df_raw = df_raw.rename(columns={
+                    date_col: "Date", nar_col: "Narration",
+                    deb_col: "Debit", cre_col: "Credit"
+                })
+                df_raw = df_raw[["Date", "Narration", "Debit", "Credit"]]
                 df_raw["Date"]      = parse_date_column(df_raw["Date"])
                 df_raw["Narration"] = df_raw["Narration"].astype(str).str.upper().str.strip()
                 df_raw["Debit"]     = df_raw["Debit"].apply(clean_number)
@@ -495,14 +479,14 @@ else:
                 st.error(f"Error reading {file.name}: {e}")
 
         if dfs_with_names:
-            interbank_keys  = detect_interbank(dfs_with_names)
-            df_combined     = pd.concat([df for _, df in dfs_with_names], ignore_index=True)
+            interbank_keys = detect_interbank(dfs_with_names)
+            df_combined    = pd.concat([df for _, df in dfs_with_names], ignore_index=True)
+
             df_combined["Transaction_Head"] = df_combined["Narration"].apply(extract_head)
             df_combined["Ledger"]           = ""
             df_combined["Ledger Group"]     = ""
             df_combined["Interbank"]        = False
 
-            seen_keys = set()
             for idx, row in df_combined.iterrows():
                 date   = str(row["Date"])
                 amount = row["Debit"] if row["Debit"] > 0 else row["Credit"]
@@ -511,9 +495,12 @@ else:
                     df_combined.at[idx, "Ledger"]       = "Interbank"
                     df_combined.at[idx, "Ledger Group"] = "Bank Accounts"
                     df_combined.at[idx, "Interbank"]    = True
-                    seen_keys.add(key)
 
-            df_combined = apply_vendor_memory(df_combined, st.session_state.client_id, st.session_state.bank_id)
+            df_combined = apply_vendor_memory(
+                df_combined,
+                st.session_state.client_id,
+                st.session_state.bank_id
+            )
             st.session_state.df = df_combined
 
     if st.session_state.df is not None:
@@ -545,7 +532,7 @@ else:
         st.markdown('<div class="section-label">Search Transactions</div>', unsafe_allow_html=True)
         search = st.text_input("Filter", placeholder="Search by narration, vendor, ledger, or date...", label_visibility="collapsed")
 
-        display_df   = df[[c for c in df.columns if c != "Interbank"]].copy()
+        display_df = df[[c for c in df.columns if c != "Interbank"]].copy()
         if search.strip():
             mask       = display_df.apply(lambda col: col.astype(str).str.contains(search.strip(), case=False, na=False)).any(axis=1)
             display_df = display_df[mask]
@@ -563,8 +550,8 @@ else:
         if unmapped_vendors:
             col1, col2 = st.columns([2, 1])
             with col1:
-                selected     = st.multiselect("Select vendors to map", unmapped_vendors)
-                ledger_name  = st.text_input("Ledger Name", placeholder="e.g. Office Supplies")
+                selected    = st.multiselect("Select vendors to map", unmapped_vendors)
+                ledger_name = st.text_input("Ledger Name", placeholder="e.g. Office Supplies")
             with col2:
                 ledger_group = st.selectbox("Ledger Group", LEDGER_GROUPS)
                 st.markdown("<br>", unsafe_allow_html=True)
@@ -572,7 +559,11 @@ else:
                     if selected and ledger_name.strip():
                         for v in selected:
                             try:
-                                save_vendor_memory(st.session_state.client_id, st.session_state.bank_id, v, ledger_name.strip(), ledger_group)
+                                save_vendor_memory(
+                                    st.session_state.client_id,
+                                    st.session_state.bank_id,
+                                    v, ledger_name.strip(), ledger_group
+                                )
                             except Exception as e:
                                 st.error(f"Failed to save {v}: {e}")
                         st.success(f"✓ Saved {len(selected)} mapping(s)")
@@ -586,13 +577,15 @@ else:
 
         st.markdown("---")
         st.markdown('<div class="section-label">Export to Tally</div>', unsafe_allow_html=True)
-        bank_name  = st.session_state.get("bank", st.session_state.get("bank_dd_clf", "export"))
+
+        bank_name  = st.session_state.get("current_bank_name_clf", "export")
         export_df  = prepare_tally_export(df, bank_name)
         export_df  = export_df[[c for c in export_df.columns if c != "Interbank"]]
+
         st.download_button(
             label="⬇ Download Tally CSV",
             data=export_df.to_csv(index=False),
-            file_name=f"tally_{str(bank_name).replace(' ','_')}.csv",
+            file_name=f"tally_{str(bank_name).replace(' ', '_')}.csv",
             mime="text/csv"
         )
 
@@ -637,13 +630,18 @@ with tab2:
         if st.button("💾 Save All Changes", key="mem_save"):
             for _, row in edited.iterrows():
                 try:
-                    save_vendor_memory(st.session_state.client_id, st.session_state.bank_id, row["Vendor"], row["Ledger"], row["Ledger Group"])
+                    save_vendor_memory(
+                        st.session_state.client_id,
+                        st.session_state.bank_id,
+                        row["Vendor"], row["Ledger"], row["Ledger Group"]
+                    )
                 except Exception as e:
                     st.error(f"Failed: {row['Vendor']}: {e}")
             st.success("✓ All changes saved")
 
     st.markdown("---")
     st.markdown('<div class="section-label">Delete a Mapping</div>', unsafe_allow_html=True)
+
     col3, col4 = st.columns([3, 1])
     with col3:
         delete_v = st.selectbox("Select vendor", df_mem["Vendor"].tolist(), key="del_vendor_select")
@@ -700,6 +698,8 @@ with tab3:
                         st.rerun()
                     except Exception as e:
                         st.error(f"Could not add: {e}")
+            else:
+                st.warning("Enter a word.")
 
     with col2:
         st.markdown('<div class="section-label">Delete Stopword</div>', unsafe_allow_html=True)
@@ -715,3 +715,5 @@ with tab3:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Could not delete: {e}")
+        else:
+            st.info("No stopwords to delete.")
