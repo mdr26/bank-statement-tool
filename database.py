@@ -1,13 +1,10 @@
 import os
 import streamlit as st
-from psycopg2 import pool
+from psycopg2 import pool, OperationalError
 
 
 # ─────────────────────────────────────────────
 #  CONNECTION POOL
-#  Created once when the app starts.
-#  minconn=1 : always keep 1 connection ready
-#  maxconn=5 : never open more than 5 at once
 # ─────────────────────────────────────────────
 
 @st.cache_resource
@@ -17,13 +14,29 @@ def init_pool():
 
 
 def get_conn():
-    """Borrow a connection from the pool."""
-    return init_pool().getconn()
+    """
+    Borrow a connection from the pool.
+    If the pool is stale (e.g. after Supabase wakes from pause),
+    clear the cache and create a fresh pool automatically.
+    """
+    try:
+        conn = init_pool().getconn()
+        # Test the connection is actually alive
+        conn.cursor().execute("SELECT 1")
+        return conn
+    except OperationalError:
+        # Pool is stale — clear cache and reconnect
+        st.cache_resource.clear()
+        conn = init_pool().getconn()
+        return conn
 
 
 def release_conn(conn):
-    """Return the connection to the pool so it can be reused."""
-    init_pool().putconn(conn)
+    """Return the connection to the pool."""
+    try:
+        init_pool().putconn(conn)
+    except Exception:
+        pass  # If pool is gone, just discard
 
 
 # ─────────────────────────────────────────────
@@ -174,11 +187,10 @@ def delete_memory(client_id, bank_id, vendor):
 
 
 # ─────────────────────────────────────────────
-#  STOPWORDS  (shared across all clients)
+#  STOPWORDS
 # ─────────────────────────────────────────────
 
 def get_stopwords():
-    """Load all stopwords from Supabase as an uppercase set."""
     conn = get_conn()
     try:
         cur = conn.cursor()
